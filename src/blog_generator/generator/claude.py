@@ -20,12 +20,13 @@ class BlogDraft:
 class ClaudeGenerator:
     def __init__(self, config: Config):
         self.config = config
+        self.timeout = config.api.timeout_ms / 1000  # Convert to seconds
         self.client = Anthropic(
             api_key=config.api.anthropic_auth_token,
             base_url=config.api.anthropic_base_url,
+            timeout=self.timeout,
         )
         self.model = config.api.default_model
-        self.timeout = config.api.timeout_ms / 1000  # Convert to seconds
 
     def generate_draft(
         self,
