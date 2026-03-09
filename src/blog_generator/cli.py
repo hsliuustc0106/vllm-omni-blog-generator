@@ -135,7 +135,7 @@ async def _generate_async(
             draft,
             release_info,
             [c.sha for c in commits],
-            prs,
+            [p.number for p in pr_data],
             output_dir / "blog.json",
         )
         console.print(f"[green]✓[/green] Saved: {output_dir}/blog.json")
