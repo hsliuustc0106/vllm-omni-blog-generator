@@ -39,45 +39,38 @@ class ClaudeGenerator:
     ) -> BlogDraft:
         """Generate blog draft from collected data."""
 
-        # Build context
-        commits_summary = self._format_commits(commits)
+        # Build context (with size limits for faster API response)
+        release_body = release.body[:1000] if len(release.body) > 1000 else release.body
+        commits_summary = self._format_commits(commits[:10])  # Limit to 10 commits
         prs_content = self._format_prs(prs)
         issues_content = self._format_issues(issues)
         docs_content = self._format_docs(docs)
 
-        # Build user prompt
-        user_prompt = f"""请为 vLLM-Omni {release.tag_name} 版本撰写一篇技术博客。
+        # Build user prompt (more concise for faster generation)
+        user_prompt = f"""为 vLLM-Omni {release.tag_name} 写一篇技术博客。
 
-## 版本信息
-- 版本号: {release.tag_name}
-- 发布日期: {release.published_at[:10]}
-- 发布说明: {release.body}
+版本: {release.tag_name} ({release.published_at[:10]})
+更新说明: {release_body}
 
-## 本次更新的主要提交
+主要提交:
 {commits_summary}
 
-## 相关 PR
-{prs_content}
+相关PR: {prs_content if prs_content != "无" else "无"}
+相关Issue: {issues_content if issues_content != "无" else "无"}
 
-## 相关 Issue
-{issues_content}
+要求:
+- 语言: {"中文" if language == "zh" else "English"}
+- 字数: 800-1200字
+- 标题有吸引力
+- 包含1-2个代码示例
 
-## 参考文档
-{docs_content}
-
-## 要求
-- 语言：{"中文" if language == "zh" else "English"}
-- 字数：1500-2500字
-- 标题要有吸引力
-- 包含2-3个代码示例
-
-请以JSON格式输出：
+输出JSON格式:
 {{"title": "...", "summary": "...", "tags": [...], "content": "..."}}"""
 
         # Call Claude API
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=2048,  # Reduced for faster generation
             system=self._get_system_prompt(),
             messages=[{"role": "user", "content": user_prompt}],
         )
@@ -86,32 +79,71 @@ class ClaudeGenerator:
         content = response.content[0].text
         return self._parse_response(content)
 
+    def generate_from_prs(
+        self,
+        prs: list[PullRequest],
+        issues: list[Issue],
+        docs: list[Doc],
+        language: str = "zh",
+    ) -> BlogDraft:
+        """Generate blog draft from PRs only (faster, smaller context)."""
+        prs_content = self._format_prs(prs)
+        issues_content = self._format_issues(issues)
+        docs_content = self._format_docs(docs)
+
+        # Build concise prompt
+        user_prompt = f"""基于以下PR/Issue写一篇简短的技术介绍。
+
+相关PR:
+{prs_content}
+
+相关Issue:
+{issues_content}
+
+参考文档:
+{docs_content}
+
+要求:
+- 语言: {"中文" if language == "zh" else "English"}
+- 字数: 300-500字
+- 说明改动的作用和价值
+
+输出JSON格式:
+{{"title": "...", "summary": "...", "tags": [...], "content": "..."}}"""
+
+        # Call API with shorter timeout
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+
+        content = response.content[0].text
+        return self._parse_response(content)
+
     def _get_system_prompt(self) -> str:
         """Get system prompt for draft generation."""
-        return """你是 vLLM-Omni 项目的技术博主。你为大众 AI 爱好者撰写技术博客，语言通俗易懂，重点介绍新功能的能力和应用场景，而非深奥的技术细节。
+        return """你是 vLLM-Omni 项目的技术博主，为 AI 爱好者撰写通俗易懂的技术博客。
 
 写作风格：
-- 用生动的比喻解释复杂概念
+- 用比喻解释复杂概念
 - 多用实例展示功能用途
-- 避免过多专业术语，必要时用简单语言解释
-- 语气友好、热情，像在给朋友介绍新玩具
-- 适当使用emoji增加可读性（但不过度）
+- 语气友好热情
 
 文章结构：
-1. 开篇：用一个吸引人的场景或问题引入
-2. 核心更新：列出本次版本的主要亮点（3-5个）
-3. 功能详解：每个亮点配一个使用场景
-4. 性能提升：用通俗语言描述性能改进
-5. 快速上手：给出一个简单的使用示例
-6. 结尾：鼓励读者尝试，提供文档链接
+1. 开篇：用场景或问题引入
+2. 核心更新：列出主要亮点（2-3个）
+3. 功能详解：配使用场景
+4. 快速上手：简单示例
+5. 结尾：鼓励尝试
 
-输出格式：JSON，包含 title, summary, tags, content 字段。"""
+输出JSON格式，包含 title, summary, tags, content 字段。"""
 
     def _format_commits(self, commits: list[Commit]) -> str:
         if not commits:
             return "无"
         lines = []
-        for c in commits[:20]:  # Limit to 20 commits
+        for c in commits[:10]:  # Limit to 10 commits
             lines.append(f"- [{c.sha}] {c.message} (@{c.author})")
         return "\n".join(lines)
 

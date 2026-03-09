@@ -38,12 +38,12 @@ def generate(
     lang: str = typer.Option(None, help="Language (zh/en)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without writing"),
 ) -> None:
-    """Generate blog draft for a release."""
+    """Generate blog draft for a release or from PRs/issues."""
     config = get_config()
     language = lang or config.default_language
 
-    if not release and not latest:
-        console.print("[red]Error: Specify --release or --latest[/red]")
+    if not release and not latest and not pr and not issue:
+        console.print("[red]Error: Specify --release, --latest, --pr, or --issue[/red]")
         raise typer.Exit(1)
 
     asyncio.run(_generate_async(config, release, latest, issue, pr, doc, language, dry_run))
@@ -65,20 +65,27 @@ async def _generate_async(
     generator = ClaudeGenerator(config)
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        # Fetch release info
-        if latest:
-            console.print("[cyan]Fetching latest release...[/cyan]")
-            release_info = await github.get_latest_release(client)
-        else:
-            console.print(f"[cyan]Fetching release {release}...[/cyan]")
-            release_info = await github.get_release(client, release)
+        # Check if we have a release or just PRs/issues
+        has_release = release or latest
 
-        console.print(f"[green]✓[/green] Found release: {release_info.tag_name}")
+        release_info = None
+        commits = []
 
-        # Fetch commits
-        console.print("[cyan]Fetching commits...[/cyan]")
-        commits = await github.get_commits_since_release(client, release_info.tag_name)
-        console.print(f"[green]✓[/green] Found {len(commits)} commits")
+        if has_release:
+            # Fetch release info
+            if latest:
+                console.print("[cyan]Fetching latest release...[/cyan]")
+                release_info = await github.get_latest_release(client)
+            else:
+                console.print(f"[cyan]Fetching release {release}...[/cyan]")
+                release_info = await github.get_release(client, release)
+
+            console.print(f"[green]✓[/green] Found release: {release_info.tag_name}")
+
+            # Fetch commits
+            console.print("[cyan]Fetching commits...[/cyan]")
+            commits = await github.get_commits_since_release(client, release_info.tag_name)
+            console.print(f"[green]✓[/green] Found {len(commits)} commits")
 
         # Fetch PRs
         pr_data = []
@@ -106,14 +113,23 @@ async def _generate_async(
 
         # Generate blog
         console.print("[cyan]Generating blog content...[/cyan]")
-        draft = generator.generate_draft(
-            release=release_info,
-            commits=commits,
-            prs=pr_data,
-            issues=issue_data,
-            docs=doc_data,
-            language=language,
-        )
+        if has_release:
+            draft = generator.generate_draft(
+                release=release_info,
+                commits=commits,
+                prs=pr_data,
+                issues=issue_data,
+                docs=doc_data,
+                language=language,
+            )
+        else:
+            # PR/issue only mode
+            draft = generator.generate_from_prs(
+                prs=pr_data,
+                issues=issue_data,
+                docs=doc_data,
+                language=language,
+            )
         console.print(f"[green]✓[/green] Generated: {draft.title}")
 
         if dry_run:
@@ -125,7 +141,12 @@ async def _generate_async(
             return
 
         # Save outputs
-        output_dir = get_blogs_dir_path() / release_info.tag_name
+        if has_release:
+            output_dir = get_blogs_dir_path() / release_info.tag_name
+        else:
+            # Use PR numbers for directory name
+            pr_suffix = "-".join([f"pr{p.number}" for p in pr_data]) or "draft"
+            output_dir = get_blogs_dir_path() / pr_suffix
         output_dir.mkdir(parents=True, exist_ok=True)
 
         MarkdownFormatter.save(draft, release_info, output_dir / "blog.md")
@@ -142,8 +163,9 @@ async def _generate_async(
 
         console.print(f"\n[bold green]✓ Blog generated successfully![/bold green]")
         console.print(f"  Draft: {output_dir}/blog.md")
-        console.print(f"  Edit the draft, then run:")
-        console.print(f"  [cyan]blog-generator publish --release {release_info.tag_name}[/cyan]")
+        if has_release:
+            console.print(f"  Edit the draft, then run:")
+            console.print(f"  [cyan]blog-generator publish --release {release_info.tag_name}[/cyan]")
 
 
 @app.command()

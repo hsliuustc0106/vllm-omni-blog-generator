@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 from blog_generator.generator.claude import BlogDraft
 from blog_generator.fetcher.github import Release
@@ -9,13 +10,18 @@ from blog_generator.fetcher.github import Release
 
 class MarkdownFormatter:
     @staticmethod
-    def save(draft: BlogDraft, release: Release, output_path: Path) -> None:
+    def save(draft: BlogDraft, release: Optional[Release], output_path: Path) -> None:
         """Save blog as markdown file."""
+        if release:
+            header = f"""> **版本**: {release.tag_name}
+> **发布日期**: {release.published_at[:10]}
+> **标签**: {', '.join(draft.tags)}"""
+        else:
+            header = f"""> **标签**: {', '.join(draft.tags)}"""
+
         content = f"""# {draft.title}
 
-> **版本**: {release.tag_name}
-> **发布日期**: {release.published_at[:10]}
-> **标签**: {', '.join(draft.tags)}
+{header}
 
 ## 摘要
 

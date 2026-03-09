@@ -76,7 +76,7 @@ class GitHubFetcher:
         )
 
     async def get_commits_since_release(
-        self, client: httpx.AsyncClient, release_tag: str, limit: int = 50
+        self, client: httpx.AsyncClient, release_tag: str, limit: int = 10
     ) -> list[Commit]:
         """Get commits since a release."""
         # Get commits on main branch

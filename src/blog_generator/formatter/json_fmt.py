@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from blog_generator.generator.claude import BlogDraft
 from blog_generator.fetcher.github import Release
@@ -13,15 +13,15 @@ class JsonFormatter:
     @staticmethod
     def save(
         draft: BlogDraft,
-        release: Release,
+        release: Optional[Release],
         source_commits: List[str],
         source_prs: List[int],
         output_path: Path,
     ) -> None:
         """Save blog as JSON file."""
         data = {
-            "version": release.tag_name,
-            "release_date": release.published_at[:10],
+            "version": release.tag_name if release else None,
+            "release_date": release.published_at[:10] if release else None,
             "language": "zh",
             "title": draft.title,
             "summary": draft.summary,
