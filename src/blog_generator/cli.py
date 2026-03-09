@@ -1,8 +1,11 @@
 """CLI entry point."""
 
 import asyncio
+import base64
 import json
 import shutil
+import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -13,14 +16,70 @@ from rich.console import Console
 from blog_generator.config import get_config, get_blogs_dir, Config
 from blog_generator.fetcher.github import GitHubFetcher
 from blog_generator.fetcher.docs import DocFetcher
+from blog_generator.fetcher.images import (
+    ImageInput,
+    load_image,
+    extract_image_urls_from_markdown,
+    image_paths_for_embed,
+)
 from blog_generator.generator.claude import ClaudeGenerator
 from blog_generator.formatter.markdown import MarkdownFormatter
 from blog_generator.formatter.json_fmt import JsonFormatter
 from blog_generator.formatter.zhihu import ZhihuFormatter
 from blog_generator.formatter.xiaohongshu import XiaohongshuFormatter
+from blog_generator.utils.retry import NotFoundError, RetryExhaustedError
 
 app = typer.Typer(name="blog-generator", help="Generate technical blog posts for vLLM-Omni")
 console = Console()
+
+
+@dataclass
+class FetchSummary:
+    """Track fetch results for summary output."""
+    release_fetched: bool = False
+    release_error: str = ""
+    commits_count: int = 0
+    prs_success: list[int] = field(default_factory=list)
+    prs_failed: list[tuple[int, str]] = field(default_factory=list)
+    issues_success: list[int] = field(default_factory=list)
+    issues_failed: list[tuple[int, str]] = field(default_factory=list)
+    docs_success: list[str] = field(default_factory=list)
+    docs_failed: list[tuple[str, str]] = field(default_factory=list)
+    images_success: int = 0
+    images_failed: int = 0
+
+    def print_summary(self, output_dir: Path) -> None:
+        """Print fetch summary."""
+        console.print(f"\n[bold]Blog generated: {output_dir}/blog.md[/bold]\n")
+        console.print("[bold]Sources used:[/bold]")
+
+        if self.release_fetched:
+            console.print(f"  [green]✓[/green] Release")
+        elif self.release_error:
+            console.print(f"  [red]✗[/red] Release: {self.release_error}")
+
+        if self.commits_count > 0:
+            console.print(f"  [green]✓[/green] {self.commits_count} commits")
+
+        if self.prs_success:
+            console.print(f"  [green]✓[/green] {len(self.prs_success)}/{len(self.prs_success) + len(self.prs_failed)} PRs ({', '.join(f'#{n}' for n in self.prs_success)})")
+        for pr_num, err in self.prs_failed:
+            console.print(f"  [yellow]⚠[/yellow] PR #{pr_num} skipped: {err}")
+
+        if self.issues_success:
+            console.print(f"  [green]✓[/green] {len(self.issues_success)}/{len(self.issues_success) + len(self.issues_failed)} issues")
+        for iss_num, err in self.issues_failed:
+            console.print(f"  [yellow]⚠[/yellow] Issue #{iss_num} skipped: {err}")
+
+        if self.docs_success:
+            console.print(f"  [green]✓[/green] {len(self.docs_success)}/{len(self.docs_success) + len(self.docs_failed)} docs")
+        for doc_path, err in self.docs_failed:
+            console.print(f"  [yellow]⚠[/yellow] Doc skipped ({doc_path}): {err}")
+
+        if self.images_success > 0:
+            console.print(f"  [green]✓[/green] {self.images_success} images")
+        if self.images_failed > 0:
+            console.print(f"  [yellow]⚠[/yellow] {self.images_failed} images skipped")
 
 
 def get_blogs_dir_path() -> Path:
@@ -35,6 +94,7 @@ def generate(
     issue: list[int] = typer.Option([], "--issue", help="GitHub issue number"),
     pr: list[int] = typer.Option([], "--pr", help="GitHub PR number"),
     doc: list[str] = typer.Option([], "--doc", help="Doc path or URL"),
+    image: list[str] = typer.Option([], "--image", "-i", help="Image path or URL (repeatable)"),
     lang: str = typer.Option(None, help="Language (zh/en)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without writing"),
 ) -> None:
@@ -46,7 +106,7 @@ def generate(
         console.print("[red]Error: Specify --release, --latest, --pr, or --issue[/red]")
         raise typer.Exit(1)
 
-    asyncio.run(_generate_async(config, release, latest, issue, pr, doc, language, dry_run))
+    asyncio.run(_generate_async(config, release, latest, issue, pr, doc, image, language, dry_run))
 
 
 async def _generate_async(
@@ -56,13 +116,15 @@ async def _generate_async(
     issues: list[int],
     prs: list[int],
     docs: list[str],
+    image: list[str],
     language: str,
     dry_run: bool,
 ) -> None:
-    """Async implementation of generate command."""
+    """Async implementation of generate command with graceful degradation."""
     github = GitHubFetcher(config.github_token)
     doc_fetcher = DocFetcher()
     generator = ClaudeGenerator(config)
+    summary = FetchSummary()
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         # Check if we have a release or just PRs/issues
@@ -72,44 +134,130 @@ async def _generate_async(
         commits = []
 
         if has_release:
-            # Fetch release info
-            if latest:
-                console.print("[cyan]Fetching latest release...[/cyan]")
-                release_info = await github.get_latest_release(client)
-            else:
-                console.print(f"[cyan]Fetching release {release}...[/cyan]")
-                release_info = await github.get_release(client, release)
+            # Fetch release info (hard fail if missing)
+            try:
+                if latest:
+                    console.print("[cyan]Fetching latest release...[/cyan]")
+                    release_info = await github.get_latest_release(client)
+                else:
+                    console.print(f"[cyan]Fetching release {release}...[/cyan]")
+                    release_info = await github.get_release(client, release)
+                summary.release_fetched = True
+                console.print(f"[green]✓[/green] Found release: {release_info.tag_name}")
+            except NotFoundError as e:
+                summary.release_error = f"Not found: {e}"
+                console.print(f"[red]Error: Release not found[/red]")
+                raise typer.Exit(1)
+            except RetryExhaustedError as e:
+                summary.release_error = str(e.last_error)
+                console.print(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1)
 
-            console.print(f"[green]✓[/green] Found release: {release_info.tag_name}")
+            # Fetch commits (optional)
+            try:
+                console.print("[cyan]Fetching commits...[/cyan]")
+                commits = await github.get_commits_since_release(client, release_info.tag_name)
+                summary.commits_count = len(commits)
+                console.print(f"[green]✓[/green] Found {len(commits)} commits")
+            except (NotFoundError, RetryExhaustedError, httpx.HTTPError) as e:
+                console.print(f"[yellow]⚠[/yellow] Could not fetch commits: {e}")
 
-            # Fetch commits
-            console.print("[cyan]Fetching commits...[/cyan]")
-            commits = await github.get_commits_since_release(client, release_info.tag_name)
-            console.print(f"[green]✓[/green] Found {len(commits)} commits")
-
-        # Fetch PRs
+        # Fetch PRs (graceful - skip failures)
         pr_data = []
         for pr_num in prs:
             console.print(f"[cyan]Fetching PR #{pr_num}...[/cyan]")
-            pr_data.append(await github.get_pr(client, pr_num))
-        console.print(f"[green]✓[/green] Fetched {len(pr_data)} PRs")
+            try:
+                pr_data.append(await github.get_pr(client, pr_num))
+                summary.prs_success.append(pr_num)
+            except NotFoundError as e:
+                summary.prs_failed.append((pr_num, "not found"))
+                console.print(f"[yellow]⚠[/yellow] PR #{pr_num} not found, skipping")
+            except RetryExhaustedError as e:
+                summary.prs_failed.append((pr_num, str(e.last_error)[:50]))
+                console.print(f"[yellow]⚠[/yellow] PR #{pr_num} failed after retries, skipping")
+        if pr_data:
+            console.print(f"[green]✓[/green] Fetched {len(pr_data)}/{len(prs)} PRs")
 
-        # Fetch issues
+        # Fetch issues (graceful - skip failures)
         issue_data = []
         for issue_num in issues:
             console.print(f"[cyan]Fetching issue #{issue_num}...[/cyan]")
-            issue_data.append(await github.get_issue(client, issue_num))
-        console.print(f"[green]✓[/green] Fetched {len(issue_data)} issues")
+            try:
+                issue_data.append(await github.get_issue(client, issue_num))
+                summary.issues_success.append(issue_num)
+            except NotFoundError as e:
+                summary.issues_failed.append((issue_num, "not found"))
+                console.print(f"[yellow]⚠[/yellow] Issue #{issue_num} not found, skipping")
+            except RetryExhaustedError as e:
+                summary.issues_failed.append((issue_num, str(e.last_error)[:50]))
+                console.print(f"[yellow]⚠[/yellow] Issue #{issue_num} failed after retries, skipping")
+        if issue_data:
+            console.print(f"[green]✓[/green] Fetched {len(issue_data)}/{len(issues)} issues")
 
-        # Fetch docs
+        # Fetch docs (graceful - skip failures)
         doc_data = []
         for doc_path in docs:
             console.print(f"[cyan]Fetching doc: {doc_path}...[/cyan]")
             try:
                 doc_data.append(await doc_fetcher.fetch(client, doc_path))
+                summary.docs_success.append(doc_path)
             except Exception as e:
+                summary.docs_failed.append((doc_path, str(e)[:50]))
                 console.print(f"[yellow]⚠[/yellow] Skip doc {doc_path}: {e}")
-        console.print(f"[green]✓[/green] Fetched {len(doc_data)} docs")
+        if doc_data:
+            console.print(f"[green]✓[/green] Fetched {len(doc_data)}/{len(docs)} docs")
+
+        # Collect image sources: user-provided --image, PR/issue body markdown, and PR file list
+        image_sources: list[str] = list(image)
+        for pr in pr_data:
+            image_sources.extend(extract_image_urls_from_markdown(pr.body))
+        for iss in issue_data:
+            image_sources.extend(extract_image_urls_from_markdown(iss.body))
+        # Add image files from PR diffs (e.g. docs/*.png added in the PR)
+        for pr in pr_data:
+            if pr.head_sha:
+                try:
+                    files = await github.get_pr_files(client, pr.number)
+                    for f in files:
+                        filename = (f.get("filename") or "").lower()
+                        if any(filename.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                            raw_url = f"https://raw.githubusercontent.com/vllm-project/vllm-omni/{pr.head_sha}/{f.get('filename')}"
+                            image_sources.append(raw_url)
+                except Exception as e:
+                    console.print(f"[yellow]⚠[/yellow] Could not list PR #{pr.number} files: {e}")
+        # Dedupe while preserving order (user images first, then PR/issue images)
+        seen_sources = set()
+        image_sources_deduped = []
+        for src in image_sources:
+            if src not in seen_sources:
+                seen_sources.add(src)
+                image_sources_deduped.append(src)
+
+        # Load images (paths or URLs)
+        image_data: list[ImageInput] = []
+        if image_sources_deduped:
+            for img_src in image_sources_deduped:
+                console.print(f"[cyan]Loading image: {img_src}...[/cyan]")
+                try:
+                    loaded = await load_image(img_src, client)
+                    image_data.append(loaded)
+                except (httpx.HTTPError, httpx.TimeoutException) as e:
+                    console.print(f"[yellow]⚠[/yellow] Skip image {img_src}: {e}")
+                except (FileNotFoundError, ValueError) as e:
+                    console.print(f"[yellow]⚠[/yellow] Skip image {img_src}: {e}")
+            if image_data:
+                console.print(f"[green]✓[/green] Loaded {len(image_data)} images")
+            elif image_sources_deduped:
+                console.print(f"[yellow]⚠[/yellow] No images could be loaded (all failed)")
+
+        image_paths_list = image_paths_for_embed(image_data) if image_data else []
+
+        # Minimum sources check - ensure we have something to generate from
+        if not release_info and not pr_data and not issue_data:
+            console.print("[red]Error: No content sources available.[/red]")
+            console.print("  All requested PRs/issues failed to fetch.")
+            console.print("  Check that the PR/issue numbers exist and are accessible.")
+            raise typer.Exit(1)
 
         # Generate blog
         console.print("[cyan]Generating blog content...[/cyan]")
@@ -120,6 +268,8 @@ async def _generate_async(
                 prs=pr_data,
                 issues=issue_data,
                 docs=doc_data,
+                images=image_data,
+                image_paths=image_paths_list,
                 language=language,
             )
         else:
@@ -128,6 +278,8 @@ async def _generate_async(
                 prs=pr_data,
                 issues=issue_data,
                 docs=doc_data,
+                images=image_data,
+                image_paths=image_paths_list,
                 language=language,
             )
         console.print(f"[green]✓[/green] Generated: {draft.title}")
@@ -161,8 +313,17 @@ async def _generate_async(
         )
         console.print(f"[green]✓[/green] Saved: {output_dir}/blog.json")
 
-        console.print(f"\n[bold green]✓ Blog generated successfully![/bold green]")
-        console.print(f"  Draft: {output_dir}/blog.md")
+        # Save embedded images so blog markdown image links work
+        if image_data and image_paths_list:
+            for (path, _), img in zip(image_paths_list, image_data):
+                out_path = output_dir / path
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_bytes(base64.standard_b64decode(img.data_base64))
+            console.print(f"[green]✓[/green] Saved {len(image_data)} images to {output_dir}/images/")
+
+        # Print summary of what was fetched
+        summary.print_summary(output_dir)
+
         if has_release:
             console.print(f"  Edit the draft, then run:")
             console.print(f"  [cyan]blog-generator publish --release {release_info.tag_name}[/cyan]")
@@ -208,7 +369,47 @@ def publish(
     console.print(f"  Zhihu: {output_dir}/zhihu/content.md")
     console.print(f"  Xiaohongshu: {output_dir}/xiaohongshu/content.md")
     console.print(f"\nTo generate XHS images, run:")
-    console.print(f"  [cyan]/baoyu-xhs-images {output_dir}/xiaohongshu/images/prompts.md --style tech[/cyan]")
+    console.print(f"  [cyan]blog-generator xhs-images --release {release}[/cyan]")
+
+
+@app.command()
+def xhs_images(
+    release: str = typer.Option(None, "--release", "-r", help="Blog release or dir name (e.g. v0.16.0 or pr962)"),
+    blog_dir: str = typer.Option(None, "--blog-dir", help="Path to blog output dir (alternative to --release)"),
+    style: str = typer.Option("tech", "--style", "-s", help="Style for baoyu-xhs-images (e.g. tech)"),
+    no_invoke: bool = typer.Option(False, "--no-invoke", help="Only print the command, do not run baoyu"),
+) -> None:
+    """Generate Xiaohongshu front-page images via baoyu skills (prompts must exist from publish)."""
+    if blog_dir:
+        output_dir = Path(blog_dir)
+    elif release:
+        output_dir = get_blogs_dir_path() / release
+    else:
+        console.print("[red]Error: Specify --release or --blog-dir[/red]")
+        raise typer.Exit(1)
+
+    prompts_path = output_dir / "xiaohongshu" / "images" / "prompts.md"
+    if not prompts_path.exists():
+        console.print(f"[red]Error: Prompts file not found: {prompts_path}[/red]")
+        console.print("Run [cyan]blog-generator publish --release <release>[/cyan] first (with platform xiaohongshu or all).")
+        raise typer.Exit(1)
+
+    cmd = ["baoyu-xhs-images", str(prompts_path), "--style", style]
+    console.print(f"[cyan]Running: {' '.join(cmd)}[/cyan]")
+    if no_invoke:
+        console.print(f"  (use without --no-invoke to run)")
+        return
+    try:
+        subprocess.run(cmd, check=True)
+        console.print(f"[green]✓[/green] XHS images generated under {output_dir}/xiaohongshu/images/")
+    except FileNotFoundError:
+        console.print("[yellow]baoyu-xhs-images not found in PATH.[/yellow]")
+        console.print("Install baoyu-skills, then run manually:")
+        console.print(f"  [cyan]baoyu-xhs-images {prompts_path} --style {style}[/cyan]")
+        raise typer.Exit(1)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Command failed with exit code {e.returncode}[/red]")
+        raise typer.Exit(e.returncode or 1)
 
 
 @app.command("list")

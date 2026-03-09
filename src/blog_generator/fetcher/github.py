@@ -1,8 +1,10 @@
-"""GitHub API fetcher."""
+"""GitHub API fetcher with retry support."""
 
 import httpx
 from typing import Optional
 from dataclasses import dataclass
+
+from blog_generator.utils.retry import retry_async, RetryExhaustedError, NotFoundError
 
 
 @dataclass
@@ -26,6 +28,7 @@ class PullRequest:
     title: str
     body: str
     merged_at: str
+    head_sha: Optional[str] = None  # for building raw URLs to PR branch content
 
 
 @dataclass
@@ -38,17 +41,28 @@ class Issue:
 class GitHubFetcher:
     BASE_URL = "https://api.github.com/repos/vllm-project/vllm-omni"
 
-    def __init__(self, token: Optional[str] = None):
+    def __init__(self, token: Optional[str] = None, max_retries: int = 3):
         self.token = token
         self.headers = {"Accept": "application/vnd.github.v3+json"}
         if token:
             self.headers["Authorization"] = f"token {token}"
+        self.max_retries = max_retries
 
     async def _get(self, client: httpx.AsyncClient, path: str) -> dict:
-        """Make GET request to GitHub API."""
-        response = await client.get(f"{self.BASE_URL}{path}", headers=self.headers)
-        response.raise_for_status()
-        return response.json()
+        """Make GET request to GitHub API with retry."""
+
+        @retry_async(max_attempts=self.max_retries, base_delay=1.0, max_delay=30.0)
+        async def _fetch():
+            response = await client.get(f"{self.BASE_URL}{path}", headers=self.headers)
+            response.raise_for_status()
+            return response.json()
+
+        try:
+            return await _fetch()
+        except NotFoundError:
+            raise
+        except RetryExhaustedError as e:
+            raise
 
     async def get_release(self, client: httpx.AsyncClient, tag: str) -> Release:
         """Get release by tag."""
@@ -60,10 +74,8 @@ class GitHubFetcher:
                 body=data["body"],
                 published_at=data["published_at"],
             )
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise ValueError(f"Release {tag} not found")
-            raise
+        except NotFoundError:
+            raise ValueError(f"Release {tag} not found")
 
     async def get_latest_release(self, client: httpx.AsyncClient) -> Release:
         """Get latest release."""
@@ -79,7 +91,6 @@ class GitHubFetcher:
         self, client: httpx.AsyncClient, release_tag: str, limit: int = 10
     ) -> list[Commit]:
         """Get commits since a release."""
-        # Get commits on main branch
         data = await self._get(client, f"/commits?per_page={limit}")
 
         commits = []
@@ -94,12 +105,20 @@ class GitHubFetcher:
     async def get_pr(self, client: httpx.AsyncClient, pr_number: int) -> PullRequest:
         """Get PR by number."""
         data = await self._get(client, f"/pulls/{pr_number}")
+        head = data.get("head") or {}
+        head_sha = head.get("sha")
         return PullRequest(
             number=data["number"],
             title=data["title"],
             body=data["body"] or "",
             merged_at=data.get("merged_at") or "",
+            head_sha=head_sha,
         )
+
+    async def get_pr_files(self, client: httpx.AsyncClient, pr_number: int) -> list[dict]:
+        """List files changed in a PR. Each dict has 'filename', 'status', etc."""
+        data = await self._get(client, f"/pulls/{pr_number}/files")
+        return data
 
     async def get_issue(self, client: httpx.AsyncClient, issue_number: int) -> Issue:
         """Get issue by number."""

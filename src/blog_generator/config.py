@@ -4,7 +4,15 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class RetryConfigModel(BaseModel):
+    """Retry configuration with sensible defaults."""
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    base_delay_ms: int = Field(default=1000, ge=100)
+    max_delay_ms: int = Field(default=30000, ge=1000)
+    rate_limit_delay_ms: int = Field(default=60000, ge=1000)
 
 
 class ApiConfig(BaseModel):
@@ -18,6 +26,7 @@ class Config(BaseModel):
     api: ApiConfig
     github_token: Optional[str] = None
     default_language: str = "zh"
+    retry: RetryConfigModel = Field(default_factory=RetryConfigModel)
 
     @classmethod
     def load(cls, config_path: Path) -> "Config":
