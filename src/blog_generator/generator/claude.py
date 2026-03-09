@@ -140,16 +140,48 @@ class ClaudeGenerator:
 
     def _parse_response(self, content: str) -> BlogDraft:
         """Parse JSON response from Claude."""
+        import re
+
         # Try to extract JSON from response
         if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
+            json_str = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
+            json_str = content.split("```")[1].split("```")[0].strip()
+        else:
+            # Try to find JSON object in content
+            match = re.search(r'\{[\s\S]*\}', content)
+            if match:
+                json_str = match.group(0)
+            else:
+                json_str = content.strip()
 
-        data = json.loads(content.strip())
+        # Try to parse JSON
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            # If parsing fails, try to extract fields manually with regex
+            print(f"JSON parse error: {e}")
+            print(f"Attempting to extract fields manually...")
+
+            title_match = re.search(r'"title"\s*:\s*"([^"]*)"', json_str)
+            summary_match = re.search(r'"summary"\s*:\s*"([^"]*)"', json_str)
+            tags_match = re.search(r'"tags"\s*:\s*\[([^\]]*)\]', json_str)
+            content_match = re.search(r'"content"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', json_str, re.DOTALL)
+
+            data = {
+                "title": title_match.group(1) if title_match else "Untitled",
+                "summary": summary_match.group(1) if summary_match else "",
+                "tags": [],
+                "content": content_match.group(1).replace('\\"', '"').replace('\\n', '\n') if content_match else json_str,
+            }
+
+            if tags_match:
+                tags_str = tags_match.group(1)
+                data["tags"] = re.findall(r'"([^"]*)"', tags_str)
+
         return BlogDraft(
-            title=data["title"],
-            summary=data["summary"],
-            tags=data["tags"],
-            content=data["content"],
+            title=data.get("title", "Untitled"),
+            summary=data.get("summary", ""),
+            tags=data.get("tags", []),
+            content=data.get("content", ""),
         )

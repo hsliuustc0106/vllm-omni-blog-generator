@@ -10,7 +10,7 @@ import httpx
 import typer
 from rich.console import Console
 
-from blog_generator.config import get_config, Config
+from blog_generator.config import get_config, get_blogs_dir, Config
 from blog_generator.fetcher.github import GitHubFetcher
 from blog_generator.fetcher.docs import DocFetcher
 from blog_generator.generator.claude import ClaudeGenerator
@@ -22,7 +22,10 @@ from blog_generator.formatter.xiaohongshu import XiaohongshuFormatter
 app = typer.Typer(name="blog-generator", help="Generate technical blog posts for vLLM-Omni")
 console = Console()
 
-BLOGS_DIR = Path("/app/blogs")
+
+def get_blogs_dir_path() -> Path:
+    """Get blogs directory path (cached per command)."""
+    return get_blogs_dir()
 
 
 @app.command()
@@ -122,7 +125,7 @@ async def _generate_async(
             return
 
         # Save outputs
-        output_dir = BLOGS_DIR / release_info.tag_name
+        output_dir = get_blogs_dir_path() / release_info.tag_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
         MarkdownFormatter.save(draft, release_info, output_dir / "blog.md")
@@ -149,7 +152,7 @@ def publish(
     platform: str = typer.Option(None, help="Platform (zhihu/xiaohongshu)"),
 ) -> None:
     """Generate platform-specific versions from approved draft."""
-    output_dir = BLOGS_DIR / release
+    output_dir = get_blogs_dir_path() / release
 
     if not (output_dir / "blog.md").exists():
         console.print(f"[red]Error: No draft found for {release}[/red]")
@@ -189,12 +192,12 @@ def publish(
 @app.command("list")
 def list_blogs() -> None:
     """List all generated blogs."""
-    if not BLOGS_DIR.exists():
+    if not get_blogs_dir_path().exists():
         console.print("[yellow]No blogs generated yet[/yellow]")
         return
 
     console.print("[bold]Generated Blogs:[/bold]\n")
-    for version_dir in sorted(BLOGS_DIR.iterdir()):
+    for version_dir in sorted(get_blogs_dir_path().iterdir()):
         if version_dir.is_dir() and (version_dir / "blog.json").exists():
             with open(version_dir / "blog.json") as f:
                 data = json.load(f)
@@ -207,7 +210,7 @@ def regenerate(
     release: str = typer.Option(..., help="Release version"),
 ) -> None:
     """Regenerate draft (overwrites existing)."""
-    output_dir = BLOGS_DIR / release
+    output_dir = get_blogs_dir_path() / release
 
     if output_dir.exists():
         shutil.rmtree(output_dir)

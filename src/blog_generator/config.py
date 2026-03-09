@@ -37,5 +37,25 @@ class Config(BaseModel):
 
 def get_config() -> Config:
     """Get config from default location."""
-    config_path = Path("/app/blogs/config.json")
-    return Config.load(config_path)
+    # Check for local development first, then Docker path
+    local_path = Path("blogs/config.json")
+    docker_path = Path("/app/blogs/config.json")
+
+    if local_path.exists():
+        return Config.load(local_path)
+    elif docker_path.exists():
+        return Config.load(docker_path)
+    else:
+        raise FileNotFoundError(
+            f"Config file not found. Checked:\n"
+            f"  - {local_path.absolute()}\n"
+            f"  - {docker_path}\n"
+            f"Please create blogs/config.json"
+        )
+
+
+def get_blogs_dir() -> Path:
+    """Get the blogs directory path."""
+    local_path = Path("blogs")
+    docker_path = Path("/app/blogs")
+    return local_path if local_path.exists() else docker_path
