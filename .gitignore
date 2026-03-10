@@ -6,3 +6,5 @@ blogs/
 *.egg-info/
 dist/
 .env
+.baoyu-skills/
+xhs-images/

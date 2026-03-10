@@ -114,6 +114,14 @@ After publishing, generate cover images using baoyu-skills:
 /baoyu-xhs-images blogs/v0.16.0/xiaohongshu/images/prompts.md --style tech
 ```
 
+**Test example (PR blog):** For a PR-only blog (e.g. PR 962), generate then publish with the blog dir name (e.g. `pr962`), then run baoyu on the generated prompts:
+
+```bash
+blog-generator generate --pr 962
+blog-generator publish --release pr962
+/baoyu-xhs-images blogs/pr962/xiaohongshu/images/prompts.md --style tech
+```
+
 ## Development
 
 ```bash

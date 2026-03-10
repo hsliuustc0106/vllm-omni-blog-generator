@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from blog_generator.config import Config
 from blog_generator.fetcher.github import Release, Commit, PullRequest, Issue
 from blog_generator.fetcher.docs import Doc
+from blog_generator.fetcher.images import ImageInput
 
 
 @dataclass
@@ -35,9 +36,13 @@ class ClaudeGenerator:
         prs: list[PullRequest],
         issues: list[Issue],
         docs: list[Doc],
+        images: list[ImageInput] | None = None,
+        image_paths: list[tuple[str, str]] | None = None,
         language: str = "zh",
     ) -> BlogDraft:
         """Generate blog draft from collected data."""
+        images = images or []
+        image_paths = image_paths or []
 
         # Build context (with size limits for faster API response)
         release_body = release.body[:1000] if len(release.body) > 1000 else release.body
@@ -47,6 +52,10 @@ class ClaudeGenerator:
         docs_content = self._format_docs(docs)
 
         # Build user prompt (more concise for faster generation)
+        image_hint = "\n若提供了图片，请根据图片内容在博客中适当描述或引用（如架构图、截图）。\n\n" if images else ""
+        if image_paths:
+            paths_str = "、".join(p for p, _ in image_paths)
+            image_hint += f"以下图片将保存为以下路径，请在正文合适位置用 markdown 插入图片，例如 ![描述](images/xxx.png)。图片路径列表：{paths_str}\n\n"
         user_prompt = f"""为 vLLM-Omni {release.tag_name} 写一篇技术博客。
 
 版本: {release.tag_name} ({release.published_at[:10]})
@@ -57,8 +66,7 @@ class ClaudeGenerator:
 
 相关PR: {prs_content if prs_content != "无" else "无"}
 相关Issue: {issues_content if issues_content != "无" else "无"}
-
-要求:
+{image_hint}要求:
 - 语言: {"中文" if language == "zh" else "English"}
 - 字数: 800-1200字
 - 标题有吸引力
@@ -67,12 +75,23 @@ class ClaudeGenerator:
 输出JSON格式:
 {{"title": "...", "summary": "...", "tags": [...], "content": "..."}}"""
 
+        content_blocks: list[dict] = [{"type": "text", "text": user_prompt}]
+        for img in images:
+            content_blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.media_type,
+                    "data": img.data_base64,
+                },
+            })
+
         # Call Claude API
         response = self.client.messages.create(
             model=self.model,
             max_tokens=2048,  # Reduced for faster generation
             system=self._get_system_prompt(),
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=[{"role": "user", "content": content_blocks}],
         )
 
         # Parse response
@@ -84,14 +103,22 @@ class ClaudeGenerator:
         prs: list[PullRequest],
         issues: list[Issue],
         docs: list[Doc],
+        images: list[ImageInput] | None = None,
+        image_paths: list[tuple[str, str]] | None = None,
         language: str = "zh",
     ) -> BlogDraft:
         """Generate blog draft from PRs only (faster, smaller context)."""
+        images = images or []
+        image_paths = image_paths or []
         prs_content = self._format_prs(prs)
         issues_content = self._format_issues(issues)
         docs_content = self._format_docs(docs)
 
         # Build concise prompt
+        image_hint = "\n若提供了图片，请根据图片内容在博客中适当描述或引用。\n\n" if images else ""
+        if image_paths:
+            paths_str = "、".join(p for p, _ in image_paths)
+            image_hint += f"以下图片将保存为以下路径，请在正文合适位置用 markdown 插入图片，例如 ![描述](images/xxx.png)。图片路径列表：{paths_str}\n\n"
         user_prompt = f"""基于以下PR/Issue写一篇简短的技术介绍。
 
 相关PR:
@@ -102,8 +129,7 @@ class ClaudeGenerator:
 
 参考文档:
 {docs_content}
-
-要求:
+{image_hint}要求:
 - 语言: {"中文" if language == "zh" else "English"}
 - 字数: 300-500字
 - 说明改动的作用和价值
@@ -111,11 +137,22 @@ class ClaudeGenerator:
 输出JSON格式:
 {{"title": "...", "summary": "...", "tags": [...], "content": "..."}}"""
 
+        content_blocks: list[dict] = [{"type": "text", "text": user_prompt}]
+        for img in images:
+            content_blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.media_type,
+                    "data": img.data_base64,
+                },
+            })
+
         # Call API with shorter timeout
         response = self.client.messages.create(
             model=self.model,
             max_tokens=1024,
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=[{"role": "user", "content": content_blocks}],
         )
 
         content = response.content[0].text
@@ -129,6 +166,8 @@ class ClaudeGenerator:
 - 用比喻解释复杂概念
 - 多用实例展示功能用途
 - 语气友好热情
+
+如果用户提供了图片（如架构图、界面截图），请在文章中适当描述或引用。
 
 文章结构：
 1. 开篇：用场景或问题引入
