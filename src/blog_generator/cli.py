@@ -28,6 +28,11 @@ from blog_generator.formatter.json_fmt import JsonFormatter
 from blog_generator.formatter.zhihu import ZhihuFormatter
 from blog_generator.formatter.xiaohongshu import XiaohongshuFormatter
 from blog_generator.utils.retry import NotFoundError, RetryExhaustedError
+from blog_generator.publisher.xiaohongshu import (
+    XhsPublisher,
+    XhsPostData,
+    ChromeNotRunningError,
+)
 
 app = typer.Typer(name="blog-generator", help="Generate technical blog posts for vLLM-Omni")
 console = Console()
@@ -441,6 +446,65 @@ def regenerate(
 
     console.print(f"[cyan]Regenerating {release}...[/cyan]")
     console.print(f"Run: [cyan]blog-generator generate --release {release}[/cyan]")
+
+
+@app.command("xhs-post")
+def xhs_post(
+    release: str = typer.Option(..., "--release", "-r", help="Blog release or dir name (e.g. v0.16.0 or pr962)"),
+    auto_publish: bool = typer.Option(False, "--auto-publish", help="Auto-click publish button"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Open browser but don't save/publish"),
+    generate_images: bool = typer.Option(True, "--images/--no-images", help="Generate images via baoyu-xhs-images"),
+) -> None:
+    """Post blog to Xiaohongshu (requires Chrome with remote debugging).
+
+    Prerequisites:
+    1. Start Chrome with remote debugging:
+       open -a 'Google Chrome' --args --remote-debugging-port=9222
+
+    2. Login to Xiaohongshu creator account in that Chrome
+
+    3. Run this command
+    """
+    output_dir = get_blogs_dir_path() / release
+
+    if not (output_dir / "xiaohongshu" / "content.md").exists():
+        console.print(f"[red]Error: XHS content not found for {release}[/red]")
+        console.print("Run [cyan]blog-generator publish --release {release}[/cyan] first.")
+        raise typer.Exit(1)
+
+    # Generate images if requested
+    if generate_images:
+        console.print("[cyan]Generating images via baoyu-xhs-images...[/cyan]")
+        prompts_path = output_dir / "xiaohongshu" / "images" / "prompts.md"
+        if prompts_path.exists():
+            try:
+                subprocess.run(
+                    ["baoyu-xhs-images", str(prompts_path), "--style", "notion"],
+                    check=False,  # Don't fail if image generation fails
+                )
+            except FileNotFoundError:
+                console.print("[yellow]⚠ baoyu-xhs-images not found, continuing without images[/yellow]")
+        else:
+            console.print("[yellow]⚠ Prompts file not found, continuing without images[/yellow]")
+
+    # Load content
+    publisher = XhsPublisher()
+    try:
+        data = publisher.load_content(output_dir)
+    except Exception as e:
+        console.print(f"[red]Error loading content: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Post to XHS
+    try:
+        publisher.post(data, auto_publish=auto_publish, dry_run=dry_run)
+        console.print("\n[green]✓ Done![/green]")
+    except ChromeNotRunningError:
+        # Error message already printed by publisher
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Cancelled by user[/yellow]")
+        raise typer.Exit(0)
 
 
 if __name__ == "__main__":
