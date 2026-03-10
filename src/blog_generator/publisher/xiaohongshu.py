@@ -175,25 +175,19 @@ class XhsPublisher:
             console.print("\n[yellow]Dry run - not saving or publishing[/yellow]")
             return True
 
-        # Instructions for user
-        if auto_publish:
-            console.print("\n[yellow]Auto-publish mode - will click publish automatically[/yellow]")
-        else:
-            console.print("\n[green]Browser opened. Please review and click '发布' to publish.[/green]")
-            console.print("[dim]Content has been loaded. Images need to be uploaded manually.[/dim]")
-
-        # Copy content to clipboard for easy paste
+        # Copy content to clipboard first
         self._copy_to_clipboard(data.content)
-        console.print("\n[cyan]Content copied to clipboard! Press Cmd+V to paste.[/cyan]")
+        console.print("[cyan]Content copied to clipboard.[/cyan]")
 
-        # Print image paths for manual upload
-        if data.images:
-            console.print("\n[bold]Images to upload:[/bold]")
-            for img in data.images:
-                console.print(f"  • {img}")
-
-        if not auto_publish:
-            console.print("\n[green]Waiting for you to publish... Press Ctrl+C to cancel.[/green]")
+        # Automate the posting process
+        if auto_publish:
+            console.print("\n[yellow]Auto-publish mode - filling form and publishing...[/yellow]")
+            self.fill_and_publish(data, dry_run=False)
+        else:
+            console.print("\n[green]Filling form... Please review before it publishes.[/green]")
+            self.fill_and_publish(data, dry_run=True)
+            console.print("\n[green]Form filled. Please review and click '发布' to publish.[/green]")
+            console.print("[dim]Images may need to be uploaded manually via drag & drop.[/dim]")
 
         return True
 
@@ -204,3 +198,115 @@ class XhsPublisher:
             stdin=subprocess.PIPE,
         )
         process.communicate(text.encode("utf-8"))
+
+    def fill_and_publish(
+        self,
+        data: "XhsPostData",
+        dry_run: bool = False,
+    ) -> bool:
+        """
+        Fill the form and publish using keyboard shortcuts.
+
+        This automates:
+        1. Activate Chrome
+        2. Paste the content (Cmd+V)
+        3. Upload images (opens Finder)
+        4. Click publish button
+        """
+        # Content is already in clipboard from post()
+
+        # Wait for page to be ready
+        time.sleep(2)
+
+        # Simple approach: activate Chrome and use keyboard shortcuts
+        console.print("[cyan]Activating Chrome...[/cyan]")
+        activate_script = '''
+        tell application "Google Chrome"
+            activate
+        end tell
+        '''
+        subprocess.run(["osascript", "-e", activate_script], check=False)
+        time.sleep(1)
+
+        # Use cliclick for clicking, then AppleScript for paste
+        CLICLICK_PATH = "/opt/homebrew/bin/cliclick"
+        try:
+            # Click in the editor area
+            console.print("[cyan]Clicking editor area...[/cyan]")
+            click_result = subprocess.run(
+                [CLICLICK_PATH, "c:500,400"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if click_result.returncode != 0:
+                console.print(f"[yellow]Click failed: {click_result.stderr}[/yellow]")
+                raise FileNotFoundError("cliclick click failed")
+
+            time.sleep(0.5)
+
+            # Use AppleScript for Cmd+V (more reliable than cliclick for key combos)
+            console.print("[cyan]Pasting content...[/cyan]")
+            paste_script = '''
+            tell application "System Events"
+                keystroke "v" using command down
+            end tell
+            '''
+            paste_result = subprocess.run(
+                ["osascript", "-e", paste_script],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if paste_result.returncode == 0:
+                console.print("[green]✓ Content pasted![/green]")
+            else:
+                console.print(f"[yellow]Paste may have failed: {paste_result.stderr}[/yellow]")
+                console.print("[yellow]Please press Cmd+V manually to paste.[/yellow]")
+
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            # Fallback: just print instructions
+            console.print(f"[yellow]Automation not available: {e}[/yellow]")
+            console.print("\n[bold]Manual steps:[/bold]")
+            console.print("  1. Click in the editor area")
+            console.print("  2. Press Cmd+V to paste content")
+            console.print("  3. Upload images")
+            console.print("  4. Click 发布")
+
+        # Upload images using AppleScript
+        if data.images:
+            console.print(f"[cyan]Opening images for upload...[/cyan]")
+            for img in data.images:
+                self._upload_image_via_script(img)
+                time.sleep(0.5)
+
+        if dry_run:
+            console.print("\n[yellow]Dry run - please click 发布 manually[/yellow]")
+            return True
+
+        # Click publish button
+        console.print("[cyan]Attempting to click publish...[/cyan]")
+        try:
+            # Try clicking in bottom-right area where publish button usually is
+            subprocess.run(
+                [CLICLICK_PATH, "c:1200,800"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            console.print("[yellow]Please click the 发布 button manually.[/yellow]")
+
+        return True
+
+    def _upload_image_via_script(self, image_path: Path) -> None:
+        """Upload a single image using AppleScript file chooser."""
+        # This is tricky - we need to interact with the file chooser
+        # For now, we'll use a simpler approach: open Finder with the image
+        abs_path = image_path.resolve()
+
+        # Open Finder showing the image
+        subprocess.run(["open", "-R", str(abs_path)], check=False)
+        console.print(f"  [dim]Opened Finder for: {abs_path.name}[/dim]")
+        console.print("  [yellow]Please drag the image to the XHS upload area[/yellow]")
