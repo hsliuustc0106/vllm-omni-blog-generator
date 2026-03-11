@@ -387,6 +387,7 @@ def xhs_images(
     blog_dir: str = typer.Option(None, "--blog-dir", help="Path to blog output dir (alternative to --release)"),
     style: str = typer.Option("tech", "--style", "-s", help="Style for baoyu-xhs-images (e.g. tech)"),
     no_invoke: bool = typer.Option(False, "--no-invoke", help="Only print the command, do not run baoyu"),
+    select_images: bool = typer.Option(False, "--select-images", help="Interactively select which images to include in carousel"),
 ) -> None:
     """Generate Xiaohongshu front-page images via baoyu skills (prompts must exist from publish)."""
     if blog_dir:
@@ -403,6 +404,78 @@ def xhs_images(
         console.print("Run [cyan]blog-generator publish --release <release>[/cyan] first (with platform xiaohongshu or all).")
         raise typer.Exit(1)
 
+    # Handle --select-images flag
+    if select_images:
+        console.print("[cyan]Parsing prompts and selecting images interactively...[/cyan]")
+
+        # Parse prompts file
+        prompts_data = XiaohongshuFormatter.parse_prompts_file(prompts_path)
+
+        if not prompts_data:
+            console.print("[yellow]No image prompts found in prompts file[/yellow]")
+            return
+
+        # Let user select images
+        selected_indices = XiaohongshuFormatter.select_images_interactive(prompts_data)
+
+        # Generate only selected images using baoyu-image-gen
+        images_dir = output_dir / "xiaohongshu" / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        generated_image_paths = []
+        for orig_idx in selected_indices:
+            prompt_info = prompts_data[orig_idx]
+            prompt_text = prompt_info['prompt']
+
+            # Determine output filename
+            if prompt_info['type'] == 'cover':
+                image_filename = "01-cover.png"
+            else:
+                # Use slide number or generate sequential filename
+                slide_prompts_count = sum(1 for p in prompts_data if p['type'] == 'carousel')
+                slide_num = slide_prompts_count
+                image_filename = f"{slide_num:02d}-slide.png"
+
+            image_path = images_dir / image_filename
+
+            console.print(f"[cyan]Generating {prompt_info['type']}: {image_filename}...[/cyan]")
+
+            # Build baoyu-image-gen command
+            img_gen_cmd = [
+                "baoyu-image-gen",
+                "--prompt", prompt_text,
+                "--image", str(image_path),
+                "--ar", "3:4",  # XHS uses 3:4 aspect ratio
+            ]
+
+            if no_invoke:
+                console.print(f"  [dim](use without --no-invoke to run)[/dim]")
+                generated_image_paths.append(str(image_path))
+                continue
+
+            try:
+                subprocess.run(img_gen_cmd, check=True)
+                generated_image_paths.append(str(image_path))
+                console.print(f"[green]✓[/green] Generated: {image_filename}")
+            except FileNotFoundError:
+                console.print("[yellow]baoyu-image-gen not found in PATH.[/yellow]")
+                console.print("Install baoyu-skills, then run manually:")
+                console.print(f"  [cyan]{' '.join(img_gen_cmd)}[/cyan]")
+                raise typer.Exit(1)
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Failed to generate {image_filename}: exit code {e.returncode}[/red]")
+                # Continue with other images instead of failing completely
+
+        # Update post.json with generated image paths
+        if generated_image_paths:
+            # Convert to absolute paths
+            abs_image_paths = [str(Path(p).resolve()) for p in generated_image_paths]
+            XiaohongshuFormatter.update_post_json_images(output_dir / "xiaohongshu", abs_image_paths)
+
+        console.print(f"\n[green]✓[/green] Generated {len(generated_image_paths)} images under {images_dir}/")
+        return
+
+    # Original behavior: run baoyu-xhs-images with full prompts file
     cmd = ["baoyu-xhs-images", str(prompts_path), "--style", style]
     console.print(f"[cyan]Running: {' '.join(cmd)}[/cyan]")
     if no_invoke:
