@@ -370,6 +370,10 @@ def publish(
         console.print(f"[green]✓[/green] Generated: {output_dir}/xiaohongshu/content.md")
         console.print(f"[green]✓[/green] Generated: {output_dir}/xiaohongshu/images/prompts.md")
 
+        # Generate post.json for automated XHS posting
+        XiaohongshuFormatter.save_post_json(content, title, tags, output_dir / "xiaohongshu")
+        console.print(f"[green]✓[/green] Generated: {output_dir}/xiaohongshu/post.json")
+
     console.print(f"\n[bold green]✓ Published successfully![/bold green]")
     console.print(f"  Zhihu: {output_dir}/zhihu/content.md")
     console.print(f"  Xiaohongshu: {output_dir}/xiaohongshu/content.md")
