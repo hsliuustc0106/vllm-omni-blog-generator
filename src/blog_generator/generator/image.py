@@ -1,6 +1,7 @@
 """Image generation using BigModel's GLM-Image API."""
 
 import base64
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -41,11 +42,19 @@ class ImageGenerator:
             GeneratedImage containing the image data, format, and prompt.
 
         Raises:
+            ValueError: If prompt is empty, size format is invalid, or API response is malformed.
             httpx.HTTPStatusError: If the API request fails.
         """
-        image_size = size or self.config.size
+        # Input validation for prompt
+        if not prompt or not prompt.strip():
+            raise ValueError("Prompt cannot be empty or whitespace only")
 
-        async with httpx.AsyncClient() as client:
+        # Input validation for size
+        image_size = size or self.config.size
+        if not re.match(r"^\d+x\d+$", image_size):
+            raise ValueError(f"Invalid size format: '{image_size}'. Expected format: 'WxH' (e.g., '1024x1024')")
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{self.config.base_url}/images/generations",
                 headers={
@@ -61,9 +70,18 @@ class ImageGenerator:
             )
             response.raise_for_status()
 
-            data = response.json()
-            base64_image = data["data"][0]
-            image_data = base64.b64decode(base64_image)
+            try:
+                data = response.json()
+            except Exception as e:
+                raise ValueError(f"Invalid API response format: {e}") from e
+
+            try:
+                base64_image = data["data"][0]
+                image_data = base64.b64decode(base64_image)
+            except (KeyError, IndexError) as e:
+                raise ValueError(f"Invalid API response format: missing 'data[0]' field: {e}") from e
+            except Exception as e:
+                raise ValueError(f"Failed to decode base64 image data: {e}") from e
 
             # Detect format from magic bytes
             image_format = self._detect_format(image_data)

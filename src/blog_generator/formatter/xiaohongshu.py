@@ -152,6 +152,57 @@ Show a simple usage code snippet
         return ' '.join(result) if result else title[:max_length]
 
     @staticmethod
+    def build_cover_prompt(title: str, content: str) -> str:
+        """Build an image generation prompt for cover image.
+
+        Args:
+            title: Blog post title (truncated to 30 chars for text overlay)
+            content: Blog content (first 200 chars used for context)
+
+        Returns:
+            Formatted prompt string for image generation
+        """
+        # Truncate title to 30 chars for text overlay
+        truncated_title = title[:30] if len(title) > 30 else title
+
+        # Extract first 200 chars of content for context
+        content_context = content[:200] if len(content) > 200 else content
+
+        prompt = f"""Generate a cover image for a technical blog post.
+
+Title: {truncated_title}
+
+Context: {content_context}
+
+Style Guidelines:
+- Clean, minimalist, tech aesthetic
+- Modern and professional design
+- Suitable for social media sharing
+
+Color Scheme:
+- Blue gradient background
+- White accents for contrast
+- Subtle tech-inspired patterns
+
+Visual Elements:
+- Abstract AI visualization
+- Cloud computing imagery
+- Network/connection patterns
+- Modern geometric shapes
+
+Text Overlay:
+- Title text: "{truncated_title}"
+- Clean sans-serif font
+- Positioned for maximum readability
+
+Image Specifications:
+- Aspect ratio suitable for Xiaohongshu cover
+- High contrast for text visibility
+- Professional tech industry style"""
+
+        return prompt
+
+    @staticmethod
     def extract_image_paths(content_md: str) -> list[str]:
         """Extract image paths from markdown content.
 
