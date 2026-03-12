@@ -38,9 +38,22 @@ Create `blogs/config.json`:
     "timeout_ms": 3000000
   },
   "github_token": "ghp_xxx",
-  "default_language": "zh"
+  "default_language": "zh",
+  "image": {
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "model": "GLM-Image",
+    "size": "1024x1024"
+  }
 }
 ```
+
+For cover image generation, also set the `BIGMODEL_API_KEY` environment variable:
+
+## Environment Variables
+
+| Variable | Description | Required For |
+|----------|-------------|--------------|
+| `BIGMODEL_API_KEY` | API key for GLM-Image cover generation | Cover images |
 
 ## Output Structure
 
@@ -87,8 +100,34 @@ docker run --rm -v ./blogs:/app/blogs blog-generator generate --latest --dry-run
 Generate platform-specific versions from an edited draft.
 
 ```bash
+# Generate platform formats with automatic cover image
 docker run --rm -v ./blogs:/app/blogs blog-generator publish --release v0.16.0
+
+# Skip cover image generation
+docker run --rm -v ./blogs:/app/blogs blog-generator publish --release v0.16.0 --no-cover
 ```
+
+#### Cover Image Generation
+
+The publish command can automatically generate a cover image for Xiaohongshu using GLM-Image API.
+
+**Requirements:**
+- Set `BIGMODEL_API_KEY` environment variable for GLM-Image access
+- Cover generation is enabled by default (`--cover`)
+- Use `--no-cover` to skip cover generation
+
+```bash
+# With cover generation (default)
+export BIGMODEL_API_KEY="your-api-key"
+docker run --rm -e BIGMODEL_API_KEY -v ./blogs:/app/blogs blog-generator publish --release v0.16.0
+
+# Without cover generation
+docker run --rm -v ./blogs:/app/blogs blog-generator publish --release v0.16.0 --no-cover
+```
+
+**Cover image output:**
+- Saved to: `blogs/v0.16.0/xiaohongshu/images/cover.png`
+- `post.json` is automatically updated with the cover image path
 
 ### list
 
