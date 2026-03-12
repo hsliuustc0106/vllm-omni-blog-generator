@@ -15,6 +15,13 @@ class RetryConfigModel(BaseModel):
     rate_limit_delay_ms: int = Field(default=60000, ge=1000)
 
 
+class ImageConfig(BaseModel):
+    """Image generation configuration with BigModel GLM-Image defaults."""
+    base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    model: str = "GLM-Image"
+    size: str = "1024x1024"
+
+
 class ApiConfig(BaseModel):
     anthropic_auth_token: str
     anthropic_base_url: str = "https://api.anthropic.com"
@@ -27,6 +34,7 @@ class Config(BaseModel):
     github_token: Optional[str] = None
     default_language: str = "zh"
     retry: RetryConfigModel = Field(default_factory=RetryConfigModel)
+    image: ImageConfig = Field(default_factory=ImageConfig)
 
     @classmethod
     def load(cls, config_path: Path) -> "Config":
