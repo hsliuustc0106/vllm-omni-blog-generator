@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional, TypeVar
 
 import httpx
 import typer
@@ -36,6 +36,8 @@ from blog_generator.publisher.xiaohongshu import (
 
 app = typer.Typer(name="blog-generator", help="Generate technical blog posts for vLLM-Omni")
 console = Console()
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 @dataclass
@@ -92,6 +94,24 @@ def get_blogs_dir_path() -> Path:
     return get_blogs_dir()
 
 
+async def _gather_limited(
+    items: list[T],
+    worker: Callable[[T], Awaitable[R]],
+    concurrency: int = 5,
+) -> list[tuple[T, Optional[R], Optional[Exception]]]:
+    """Run async work with bounded concurrency and preserve item ordering."""
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _run(item: T) -> tuple[T, Optional[R], Optional[Exception]]:
+        async with semaphore:
+            try:
+                return item, await worker(item), None
+            except Exception as exc:
+                return item, None, exc
+
+    return await asyncio.gather(*(_run(item) for item in items))
+
+
 @app.command()
 def generate(
     release: str = typer.Option(None, help="Release version (e.g., v0.16.0)"),
@@ -127,7 +147,7 @@ async def _generate_async(
 ) -> None:
     """Async implementation of generate command with graceful degradation."""
     github = GitHubFetcher(config.github_token)
-    doc_fetcher = DocFetcher()
+    doc_fetcher = DocFetcher(Path.cwd())
     generator = ClaudeGenerator(config)
     summary = FetchSummary()
 
@@ -169,46 +189,67 @@ async def _generate_async(
 
         # Fetch PRs (graceful - skip failures)
         pr_data = []
-        for pr_num in prs:
-            console.print(f"[cyan]Fetching PR #{pr_num}...[/cyan]")
-            try:
-                pr_data.append(await github.get_pr(client, pr_num))
-                summary.prs_success.append(pr_num)
-            except NotFoundError as e:
-                summary.prs_failed.append((pr_num, "not found"))
-                console.print(f"[yellow]⚠[/yellow] PR #{pr_num} not found, skipping")
-            except RetryExhaustedError as e:
-                summary.prs_failed.append((pr_num, str(e.last_error)[:50]))
-                console.print(f"[yellow]⚠[/yellow] PR #{pr_num} failed after retries, skipping")
+        if prs:
+            console.print(f"[cyan]Fetching {len(prs)} PR(s)...[/cyan]")
+            pr_results = await _gather_limited(
+                prs,
+                lambda pr_num: github.get_pr(client, pr_num),
+            )
+            for pr_num, pr_result, err in pr_results:
+                if pr_result is not None:
+                    pr_data.append(pr_result)
+                    summary.prs_success.append(pr_num)
+                elif isinstance(err, NotFoundError):
+                    summary.prs_failed.append((pr_num, "not found"))
+                    console.print(f"[yellow]⚠[/yellow] PR #{pr_num} not found, skipping")
+                elif isinstance(err, RetryExhaustedError):
+                    summary.prs_failed.append((pr_num, str(err.last_error)[:50]))
+                    console.print(f"[yellow]⚠[/yellow] PR #{pr_num} failed after retries, skipping")
+                else:
+                    summary.prs_failed.append((pr_num, str(err)[:50] if err else "unknown error"))
+                    console.print(f"[yellow]⚠[/yellow] PR #{pr_num} failed, skipping: {err}")
         if pr_data:
             console.print(f"[green]✓[/green] Fetched {len(pr_data)}/{len(prs)} PRs")
 
         # Fetch issues (graceful - skip failures)
         issue_data = []
-        for issue_num in issues:
-            console.print(f"[cyan]Fetching issue #{issue_num}...[/cyan]")
-            try:
-                issue_data.append(await github.get_issue(client, issue_num))
-                summary.issues_success.append(issue_num)
-            except NotFoundError as e:
-                summary.issues_failed.append((issue_num, "not found"))
-                console.print(f"[yellow]⚠[/yellow] Issue #{issue_num} not found, skipping")
-            except RetryExhaustedError as e:
-                summary.issues_failed.append((issue_num, str(e.last_error)[:50]))
-                console.print(f"[yellow]⚠[/yellow] Issue #{issue_num} failed after retries, skipping")
+        if issues:
+            console.print(f"[cyan]Fetching {len(issues)} issue(s)...[/cyan]")
+            issue_results = await _gather_limited(
+                issues,
+                lambda issue_num: github.get_issue(client, issue_num),
+            )
+            for issue_num, issue_result, err in issue_results:
+                if issue_result is not None:
+                    issue_data.append(issue_result)
+                    summary.issues_success.append(issue_num)
+                elif isinstance(err, NotFoundError):
+                    summary.issues_failed.append((issue_num, "not found"))
+                    console.print(f"[yellow]⚠[/yellow] Issue #{issue_num} not found, skipping")
+                elif isinstance(err, RetryExhaustedError):
+                    summary.issues_failed.append((issue_num, str(err.last_error)[:50]))
+                    console.print(f"[yellow]⚠[/yellow] Issue #{issue_num} failed after retries, skipping")
+                else:
+                    summary.issues_failed.append((issue_num, str(err)[:50] if err else "unknown error"))
+                    console.print(f"[yellow]⚠[/yellow] Issue #{issue_num} failed, skipping: {err}")
         if issue_data:
             console.print(f"[green]✓[/green] Fetched {len(issue_data)}/{len(issues)} issues")
 
         # Fetch docs (graceful - skip failures)
         doc_data = []
-        for doc_path in docs:
-            console.print(f"[cyan]Fetching doc: {doc_path}...[/cyan]")
-            try:
-                doc_data.append(await doc_fetcher.fetch(client, doc_path))
-                summary.docs_success.append(doc_path)
-            except Exception as e:
-                summary.docs_failed.append((doc_path, str(e)[:50]))
-                console.print(f"[yellow]⚠[/yellow] Skip doc {doc_path}: {e}")
+        if docs:
+            console.print(f"[cyan]Fetching {len(docs)} doc(s)...[/cyan]")
+            doc_results = await _gather_limited(
+                docs,
+                lambda doc_path: doc_fetcher.fetch(client, doc_path),
+            )
+            for doc_path, doc_result, err in doc_results:
+                if doc_result is not None:
+                    doc_data.append(doc_result)
+                    summary.docs_success.append(doc_path)
+                else:
+                    summary.docs_failed.append((doc_path, str(err)[:50] if err else "unknown error"))
+                    console.print(f"[yellow]⚠[/yellow] Skip doc {doc_path}: {err}")
         if doc_data:
             console.print(f"[green]✓[/green] Fetched {len(doc_data)}/{len(docs)} docs")
 
@@ -219,17 +260,21 @@ async def _generate_async(
         for iss in issue_data:
             image_sources.extend(extract_image_urls_from_markdown(iss.body))
         # Add image files from PR diffs (e.g. docs/*.png added in the PR)
-        for pr in pr_data:
-            if pr.head_sha:
-                try:
-                    files = await github.get_pr_files(client, pr.number)
-                    for f in files:
-                        filename = (f.get("filename") or "").lower()
-                        if any(filename.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp")):
-                            raw_url = f"https://raw.githubusercontent.com/vllm-project/vllm-omni/{pr.head_sha}/{f.get('filename')}"
-                            image_sources.append(raw_url)
-                except Exception as e:
-                    console.print(f"[yellow]⚠[/yellow] Could not list PR #{pr.number} files: {e}")
+        prs_with_heads = [pr for pr in pr_data if pr.head_sha]
+        if prs_with_heads:
+            pr_file_results = await _gather_limited(
+                prs_with_heads,
+                lambda pr_info: github.get_pr_files(client, pr_info.number),
+            )
+            for pr_info, files, err in pr_file_results:
+                if files is None:
+                    console.print(f"[yellow]⚠[/yellow] Could not list PR #{pr_info.number} files: {err}")
+                    continue
+                for f in files:
+                    filename = (f.get("filename") or "").lower()
+                    if any(filename.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                        raw_url = f"https://raw.githubusercontent.com/vllm-project/vllm-omni/{pr_info.head_sha}/{f.get('filename')}"
+                        image_sources.append(raw_url)
         # Dedupe while preserving order (user images first, then PR/issue images)
         seen_sources = set()
         image_sources_deduped = []
@@ -241,15 +286,19 @@ async def _generate_async(
         # Load images (paths or URLs)
         image_data: list[ImageInput] = []
         if image_sources_deduped:
-            for img_src in image_sources_deduped:
-                console.print(f"[cyan]Loading image: {img_src}...[/cyan]")
-                try:
-                    loaded = await load_image(img_src, client)
+            console.print(f"[cyan]Loading {len(image_sources_deduped)} image(s)...[/cyan]")
+            image_results = await _gather_limited(
+                image_sources_deduped,
+                lambda img_src: load_image(img_src, client),
+                concurrency=4,
+            )
+            for img_src, loaded, err in image_results:
+                if loaded is not None:
                     image_data.append(loaded)
-                except (httpx.HTTPError, httpx.TimeoutException) as e:
-                    console.print(f"[yellow]⚠[/yellow] Skip image {img_src}: {e}")
-                except (FileNotFoundError, ValueError) as e:
-                    console.print(f"[yellow]⚠[/yellow] Skip image {img_src}: {e}")
+                    summary.images_success += 1
+                else:
+                    summary.images_failed += 1
+                    console.print(f"[yellow]⚠[/yellow] Skip image {img_src}: {err}")
             if image_data:
                 console.print(f"[green]✓[/green] Loaded {len(image_data)} images")
             elif image_sources_deduped:

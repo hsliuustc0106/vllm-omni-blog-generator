@@ -1,6 +1,7 @@
 """Claude API content generator."""
 
 import json
+import re
 from anthropic import Anthropic
 from dataclasses import dataclass
 
@@ -45,7 +46,7 @@ class ClaudeGenerator:
         image_paths = image_paths or []
 
         # Build context (with size limits for faster API response)
-        release_body = release.body[:1000] if len(release.body) > 1000 else release.body
+        release_body = self._compact_text(release.body, limit=800)
         commits_summary = self._format_commits(commits[:10])  # Limit to 10 commits
         prs_content = self._format_prs(prs)
         issues_content = self._format_issues(issues)
@@ -66,11 +67,15 @@ class ClaudeGenerator:
 
 相关PR: {prs_content if prs_content != "无" else "无"}
 相关Issue: {issues_content if issues_content != "无" else "无"}
+参考文档:
+{docs_content}
 {image_hint}要求:
 - 语言: {"中文" if language == "zh" else "English"}
 - 字数: 800-1200字
 - 标题有吸引力
 - 包含1-2个代码示例
+- 优先提炼对用户有价值的变化，不要逐段复述原文
+- 只输出合法 JSON，不要加代码块
 
 输出JSON格式:
 {{"title": "...", "summary": "...", "tags": [...], "content": "..."}}"""
@@ -133,6 +138,8 @@ class ClaudeGenerator:
 - 语言: {"中文" if language == "zh" else "English"}
 - 字数: 300-500字
 - 说明改动的作用和价值
+- 优先提炼对用户有价值的变化，不要逐段复述原文
+- 只输出合法 JSON，不要加代码块
 
 输出JSON格式:
 {{"title": "...", "summary": "...", "tags": [...], "content": "..."}}"""
@@ -191,7 +198,8 @@ class ClaudeGenerator:
             return "无"
         lines = []
         for pr in prs:
-            lines.append(f"### PR #{pr.number}: {pr.title}\n{pr.body[:500]}")
+            summary = self._compact_text(pr.body, limit=280)
+            lines.append(f"- PR #{pr.number}: {pr.title}\n  摘要: {summary}")
         return "\n\n".join(lines)
 
     def _format_issues(self, issues: list[Issue]) -> str:
@@ -199,7 +207,8 @@ class ClaudeGenerator:
             return "无"
         lines = []
         for issue in issues:
-            lines.append(f"### Issue #{issue.number}: {issue.title}\n{issue.body[:500]}")
+            summary = self._compact_text(issue.body, limit=240)
+            lines.append(f"- Issue #{issue.number}: {issue.title}\n  摘要: {summary}")
         return "\n\n".join(lines)
 
     def _format_docs(self, docs: list[Doc]) -> str:
@@ -207,13 +216,30 @@ class ClaudeGenerator:
             return "无"
         lines = []
         for doc in docs:
-            lines.append(f"### {doc.path}\n{doc.content[:2000]}")
+            summary = self._compact_text(doc.content, limit=600)
+            lines.append(f"- {doc.path}\n  关键内容: {summary}")
         return "\n\n".join(lines)
+
+    def _compact_text(self, text: str, limit: int) -> str:
+        """Reduce markdown-heavy source text into a compact plain-text summary."""
+        if not text:
+            return "无"
+
+        compact = re.sub(r"```[\s\S]*?```", " ", text)
+        compact = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", compact)
+        compact = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", compact)
+        compact = re.sub(r"^#{1,6}\s*", "", compact, flags=re.MULTILINE)
+        compact = re.sub(r"[*_>`~-]+", " ", compact)
+        compact = re.sub(r"\s+", " ", compact).strip()
+
+        if len(compact) <= limit:
+            return compact
+
+        truncated = compact[:limit].rsplit(" ", 1)[0].strip()
+        return f"{truncated or compact[:limit].strip()}..."
 
     def _parse_response(self, content: str) -> BlogDraft:
         """Parse JSON response from Claude."""
-        import re
-
         # Try to extract JSON from response
         if "```json" in content:
             json_str = content.split("```json")[1].split("```")[0].strip()

@@ -90,14 +90,23 @@ class GitHubFetcher:
     async def get_commits_since_release(
         self, client: httpx.AsyncClient, release_tag: str, limit: int = 10
     ) -> list[Commit]:
-        """Get commits since a release."""
-        data = await self._get(client, f"/commits?per_page={limit}")
+        """Get commits on the default branch after the given release tag."""
+        data = await self._get(client, f"/compare/{release_tag}...HEAD")
+
+        compare_commits = data.get("commits", [])
+        if not compare_commits:
+            return []
+
+        # GitHub returns commits oldest -> newest for compare; keep the most recent ones first.
+        recent_commits = list(reversed(compare_commits[-limit:]))
 
         commits = []
-        for item in data:
+        for item in recent_commits:
             sha = item["sha"][:7]
             message = item["commit"]["message"].split("\n")[0]
-            author = item["commit"]["author"]["name"]
+            author = (
+                item.get("author", {}) or {}
+            ).get("login") or item["commit"]["author"]["name"]
             commits.append(Commit(sha=sha, message=message, author=author))
 
         return commits
