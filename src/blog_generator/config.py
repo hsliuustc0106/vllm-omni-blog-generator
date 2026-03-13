@@ -16,9 +16,12 @@ class RetryConfigModel(BaseModel):
 
 
 class ImageConfig(BaseModel):
-    """Image generation configuration with BigModel GLM-Image defaults."""
-    base_url: str = "https://open.bigmodel.cn/api/paas/v4"
-    model: str = "GLM-Image"
+    """Image generation configuration with Zhipu AI GLM-Image defaults.
+
+    API docs: https://docs.z.ai/guides/image/glm-image
+    """
+    base_url: str = "https://api.z.ai/api/paas/v4"
+    model: str = "glm-image"
     size: str = "1024x1024"
 
 

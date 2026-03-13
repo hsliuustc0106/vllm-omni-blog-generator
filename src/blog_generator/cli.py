@@ -364,6 +364,7 @@ async def _generate_async(
             release_info,
             [c.sha for c in commits],
             [p.number for p in pr_data],
+            [i.number for i in issue_data],
             output_dir / "blog.json",
         )
         console.print(f"[green]✓[/green] Saved: {output_dir}/blog.json")
@@ -405,6 +406,8 @@ def publish(
     title = blog_data["title"]
     content = blog_data["content_md"]
     tags = blog_data["tags"]
+    pr_numbers = blog_data.get("source_prs", [])
+    issue_numbers = blog_data.get("source_issues", [])
 
     # Create approved marker
     (output_dir / "approved").touch()
@@ -427,7 +430,10 @@ def publish(
 
         # Generate AI images (cover + ending) if requested
         if ai_images:
-            asyncio.run(_generate_cover_image_async(output_dir, title, content, console))
+            asyncio.run(_generate_cover_image_async(
+                output_dir, title, content, console,
+                pr_numbers=pr_numbers, issue_numbers=issue_numbers
+            ))
 
     console.print(f"\n[bold green]✓ Published successfully![/bold green]")
     console.print(f"  Zhihu: {output_dir}/zhihu/content.md")
@@ -441,6 +447,8 @@ async def _generate_cover_image_async(
     title: str,
     content: str,
     console: Console,
+    pr_numbers: list[int] = None,
+    issue_numbers: list[int] = None,
 ) -> None:
     """Generate cover and ending images for Xiaohongshu post.
 
@@ -451,6 +459,8 @@ async def _generate_cover_image_async(
         title: Blog title for cover prompt
         content: Blog content for context in cover prompt
         console: Rich console for output
+        pr_numbers: List of PR numbers for ending image reference
+        issue_numbers: List of issue numbers for ending image reference
     """
     import os
     from blog_generator.config import ImageConfig
@@ -482,7 +492,9 @@ async def _generate_cover_image_async(
 
         # 2. Generate ending image
         console.print("[cyan]Generating ending image via GLM-Image...[/cyan]")
-        ending_prompt = XiaohongshuFormatter.build_ending_prompt(title)
+        ending_prompt = XiaohongshuFormatter.build_ending_prompt(
+            title, pr_numbers=pr_numbers, issue_numbers=issue_numbers
+        )
         ending_generated = await generator.generate(prompt=ending_prompt)
         ending_path = images_dir / "end.png"
         ending_path.write_bytes(ending_generated.image_data)

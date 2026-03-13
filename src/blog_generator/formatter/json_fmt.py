@@ -16,6 +16,7 @@ class JsonFormatter:
         release: Optional[Release],
         source_commits: List[str],
         source_prs: List[int],
+        source_issues: List[int],
         output_path: Path,
     ) -> None:
         """Save blog as JSON file."""
@@ -30,6 +31,7 @@ class JsonFormatter:
             "generated_at": datetime.now().isoformat(),
             "source_commits": source_commits,
             "source_prs": source_prs,
+            "source_issues": source_issues,
         }
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

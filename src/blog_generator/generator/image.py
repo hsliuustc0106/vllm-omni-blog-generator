@@ -19,7 +19,11 @@ class GeneratedImage:
 
 
 class ImageGenerator:
-    """Generate images using BigModel's GLM-Image API."""
+    """Generate images using BigModel's GLM-Image API.
+
+    The GLM-Image API returns a URL to the generated image, which we then download.
+    API docs: https://docs.z.ai/guides/image/glm-image
+    """
 
     def __init__(self, config: ImageConfig, auth_token: str):
         """Initialize the image generator.
@@ -54,7 +58,8 @@ class ImageGenerator:
         if not re.match(r"^\d+x\d+$", image_size):
             raise ValueError(f"Invalid size format: '{image_size}'. Expected format: 'WxH' (e.g., '1024x1024')")
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            # Call GLM-Image API
             response = await client.post(
                 f"{self.config.base_url}/images/generations",
                 headers={
@@ -65,7 +70,6 @@ class ImageGenerator:
                     "model": self.config.model,
                     "prompt": prompt,
                     "size": image_size,
-                    "response_format": "b64_json",
                 },
             )
             response.raise_for_status()
@@ -75,13 +79,30 @@ class ImageGenerator:
             except Exception as e:
                 raise ValueError(f"Invalid API response format: {e}") from e
 
+            # Extract image URL or base64 data from response
             try:
-                base64_image = data["data"][0]
-                image_data = base64.b64decode(base64_image)
+                first_result = data["data"][0]
+
+                # GLM-Image returns {"url": "https://..."} not base64
+                if isinstance(first_result, dict) and "url" in first_result:
+                    image_url = first_result["url"]
+                    # Download the image from URL
+                    img_response = await client.get(image_url)
+                    img_response.raise_for_status()
+                    image_data = img_response.content
+                elif isinstance(first_result, str):
+                    # Fallback: handle base64 response (for compatibility)
+                    image_data = base64.b64decode(first_result)
+                elif isinstance(first_result, dict) and "b64_json" in first_result:
+                    # Fallback: handle {"b64_json": "..."} format
+                    image_data = base64.b64decode(first_result["b64_json"])
+                else:
+                    raise ValueError(f"Unexpected response format: {first_result}")
+
             except (KeyError, IndexError) as e:
                 raise ValueError(f"Invalid API response format: missing 'data[0]' field: {e}") from e
             except Exception as e:
-                raise ValueError(f"Failed to decode base64 image data: {e}") from e
+                raise ValueError(f"Failed to get image data: {e}") from e
 
             # Detect format from magic bytes
             image_format = self._detect_format(image_data)

@@ -218,42 +218,34 @@ Image Specifications:
         return prompt
 
     @staticmethod
-    def build_ending_prompt(title: str) -> str:
+    def build_ending_prompt(title: str, pr_numbers: list[int] = None, issue_numbers: list[int] = None) -> str:
         """Build an image generation prompt for ending/CTA image.
 
         Args:
             title: Blog post title (for style consistency)
+            pr_numbers: List of PR numbers to reference
+            issue_numbers: List of issue numbers to reference
 
         Returns:
             Formatted prompt string for image generation
         """
-        prompt = f"""Generate an ending/call-to-action image for a technical blog post.
+        # Build references text
+        refs = []
+        if pr_numbers:
+            refs.append("PR #" + ", #".join(str(p) for p in pr_numbers))
+        if issue_numbers:
+            refs.append("Issue #" + ", #".join(str(i) for i in issue_numbers))
+        refs_text = " | ".join(refs) if refs else ""
 
-Title context: {title[:30]}
+        prompt = f"""A clean, minimalist ending slide for a technical social media post.
 
-Style Guidelines:
-- Clean, minimalist, tech aesthetic
-- Match the cover image style
-- Suitable for social media sharing
+Main Text: "关注获取更多 AI 技术分享"
 
-Color Scheme:
-- Blue gradient background (matching cover style)
-- White text for contrast
+Style: Modern tech aesthetic with blue gradient background, white text.
+Layout: Centered text, clean sans-serif font.
+{f'References: {refs_text}' if refs_text else ''}
 
-Visual Elements:
-- "Follow for more" iconography
-- Social media engagement symbols
-- Modern geometric shapes
-
-Text Overlay:
-- Main text: "关注获取更多 AI 技术分享"
-- Clean sans-serif font
-- Centered, large, readable
-
-Image Specifications:
-- Aspect ratio suitable for Xiaohongshu
-- High contrast for text visibility
-- Professional tech industry style"""
+Make it visually appealing and professional."""
 
         return prompt
 
