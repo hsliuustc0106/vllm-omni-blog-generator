@@ -6,5 +6,10 @@ blogs/
 *.egg-info/
 dist/
 .env
-.baoyu-skills/
+# baoyu-skills: ignore all but allow EXTEND.md and SKILL.md
+.baoyu-skills/*
+!.baoyu-skills/*/
+.baoyu-skills/*/.env
+!.baoyu-skills/*/EXTEND.md
+!.baoyu-skills/*/SKILL.md
 xhs-images/
