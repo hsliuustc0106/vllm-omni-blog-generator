@@ -29,6 +29,10 @@ from blog_generator.formatter.json_fmt import JsonFormatter, BlogValidationError
 from blog_generator.formatter.zhihu import ZhihuFormatter
 from blog_generator.formatter.xiaohongshu import XiaohongshuFormatter
 from blog_generator.utils.retry import NotFoundError, RetryExhaustedError
+from blog_generator.utils.image_overlay import (
+    add_cover_text_overlay,
+    add_ending_text_overlay,
+)
 from blog_generator.publisher.xiaohongshu import (
     XhsPublisher,
     XhsPostData,
@@ -508,15 +512,42 @@ async def _generate_cover_image_async(
         cover_path.write_bytes(cover_generated.image_data)
         console.print(f"[green]✓[/green] Generated cover image: {cover_path}")
 
+        # 1b. Add text overlay to cover image
+        console.print("[cyan]Adding title text overlay to cover...[/cyan]")
+        from blog_generator.utils.image_overlay import add_cover_text_overlay
+        add_cover_text_overlay(cover_path, title)
+        console.print(f"[green]✓[/green] Added text overlay to cover image")
+
         # 2. Generate ending image
         console.print("[cyan]Generating ending image via GLM-Image...[/cyan]")
         ending_prompt = XiaohongshuFormatter.build_ending_prompt(
-            title, pr_numbers=pr_numbers, issue_numbers=issue_numbers
+            title,
+            pr_numbers=pr_numbers,
+            issue_numbers=issue_numbers,
+            github_repo_url=config.github_repo_url,
         )
         ending_generated = await generator.generate(prompt=ending_prompt)
         ending_path = images_dir / "end.png"
         ending_path.write_bytes(ending_generated.image_data)
         console.print(f"[green]✓[/green] Generated ending image: {ending_path}")
+
+        # 2b. Add text overlay to ending image
+        console.print("[cyan]Adding text overlay to ending...[/cyan]")
+        from blog_generator.utils.image_overlay import add_ending_text_overlay
+        # Build references text
+        refs = []
+        if pr_numbers:
+            refs.append("PR #" + ", #".join(str(p) for p in pr_numbers))
+        if issue_numbers:
+            refs.append("Issue #" + ", #".join(str(i) for i in issue_numbers))
+        refs_text = " | ".join(refs) if refs else ""
+        add_ending_text_overlay(
+            ending_path,
+            main_text="关注获取更多 AI 技术分享",
+            project_link=config.github_repo_url,
+            references=refs_text,
+        )
+        console.print(f"[green]✓[/green] Added text overlay to ending image")
 
         # 3. Build combined image list: [cover] + [PR images] + [end]
         combined_paths = XiaohongshuFormatter.build_combined_image_paths(

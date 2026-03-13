@@ -194,28 +194,28 @@ Visual Elements:
         """Build an image generation prompt for cover image.
 
         Args:
-            title: Blog post title (truncated to 30 chars for text overlay)
+            title: Blog post title (full title used for text overlay)
             content: Blog content (first 200 chars used for context)
 
         Returns:
             Formatted prompt string for image generation
         """
-        # Truncate title to 30 chars for text overlay
-        truncated_title = title[:30] if len(title) > 30 else title
-
         # Extract first 200 chars of content for context
         content_context = content[:200] if len(content) > 200 else content
 
-        prompt = f"""Generate a cover image for a technical blog post.
+        prompt = f"""Generate a cover image for a technical blog post about vLLM-Omni.
 
-Title: {truncated_title}
+=== TITLE TEXT (DISPLAY PROMINENTLY) ===
+{title}
 
-Context: {content_context}
+=== CONTENT CONTEXT ===
+{content_context}
 
-Style Guidelines:
+=== DESIGN REQUIREMENTS ===
+Style:
 - Clean, minimalist, tech aesthetic
 - Modern and professional design
-- Suitable for social media sharing
+- Suitable for Xiaohongshu social media
 
 Color Scheme:
 - Blue gradient background
@@ -228,26 +228,33 @@ Visual Elements:
 - Network/connection patterns
 - Modern geometric shapes
 
-Text Overlay:
-- Title text: "{truncated_title}"
-- Clean sans-serif font
-- Positioned for maximum readability
+Text Overlay (CRITICAL):
+- Display the FULL title text above prominently
+- Use clean sans-serif font (Chinese-compatible)
+- Position text for maximum readability
+- Ensure text is large and clear
 
 Image Specifications:
-- Aspect ratio suitable for Xiaohongshu cover
+- Aspect ratio: 3:4 (vertical, suitable for Xiaohongshu)
 - High contrast for text visibility
 - Professional tech industry style"""
 
         return prompt
 
     @staticmethod
-    def build_ending_prompt(title: str, pr_numbers: list[int] = None, issue_numbers: list[int] = None) -> str:
+    def build_ending_prompt(
+        title: str,
+        pr_numbers: list[int] = None,
+        issue_numbers: list[int] = None,
+        github_repo_url: str = "https://github.com/vllm-project/vllm-omni",
+    ) -> str:
         """Build an image generation prompt for ending/CTA image.
 
         Args:
             title: Blog post title (for style consistency)
             pr_numbers: List of PR numbers to reference
             issue_numbers: List of issue numbers to reference
+            github_repo_url: GitHub repository URL
 
         Returns:
             Formatted prompt string for image generation
@@ -260,15 +267,43 @@ Image Specifications:
             refs.append("Issue #" + ", #".join(str(i) for i in issue_numbers))
         refs_text = " | ".join(refs) if refs else ""
 
-        prompt = f"""A clean, minimalist ending slide for a technical social media post.
+        prompt = f"""Generate an ENDING/CALL-TO-ACTION slide image for a technical blog post.
 
-Main Text: "关注获取更多 AI 技术分享"
+This is the FINAL slide, NOT a cover image. It should look different from the cover.
 
-Style: Modern tech aesthetic with blue gradient background, white text.
-Layout: Centered text, clean sans-serif font.
-{f'References: {refs_text}' if refs_text else ''}
+=== MAIN CONTENT ===
+Large Centered Text: "关注获取更多 AI 技术分享"
 
-Make it visually appealing and professional."""
+Subtext (smaller): "Follow for more AI tech updates"
+
+=== PROJECT INFO (display prominently) ===
+Project Link: {github_repo_url}
+{f'Related: {refs_text}' if refs_text else ''}
+
+=== DESIGN REQUIREMENTS (DIFFERENT FROM COVER) ===
+Background:
+- DARK blue or navy gradient (NOT light blue like cover)
+- Add subtle grid or circuit pattern for tech feel
+
+Layout:
+- Text centered vertically and horizontally
+- Project link at bottom in a highlighted box
+- Add social media icons (like/follow/share symbols)
+
+Visual Elements (ENDING-SPECIFIC):
+- A "Follow" button icon
+- Thumb up or heart icon
+- QR code placeholder in corner
+- Downward arrow or "swipe up" indicator
+
+Color Scheme:
+- Darker, richer blues than cover
+- Gold/yellow accent for CTA text to stand out
+- White for project link text
+
+IMPORTANT: This must look clearly different from the cover image - it's an ENDING slide with CTA, not a title card."""
+
+        return prompt
 
         return prompt
 
