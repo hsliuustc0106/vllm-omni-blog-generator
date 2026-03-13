@@ -19,7 +19,13 @@ class XhsPostData:
 
 class XiaohongshuFormatter:
     @staticmethod
-    def format(content_md: str, title: str, tags: list[str]) -> tuple[str, str]:
+    def format(
+        content_md: str,
+        title: str,
+        tags: list[str],
+        pr_numbers: list[int] = None,
+        issue_numbers: list[int] = None,
+    ) -> tuple[str, str]:
         """Format content for Xiaohongshu.
 
         Returns:
@@ -50,18 +56,26 @@ class XiaohongshuFormatter:
         hashtag_str = " ".join(f"#{tag}" for tag in tags[:5])
         short_content += hashtag_str
 
+        # Build references for ending prompt
+        refs = []
+        if pr_numbers:
+            refs.extend([f"PR #{n}" for n in pr_numbers])
+        if issue_numbers:
+            refs.extend([f"Issue #{n}" for n in issue_numbers])
+        refs_text = " | ".join(refs) if refs else ""
+
         # Generate image prompts (cover and ending only - content uses PR images)
         image_prompts = f"""# Xiaohongshu Image Prompts
 
 ## Cover Image Prompt
 Generate a cover image for a technical blog post about vLLM-Omni.
 
-Title: {title[:30]}
+Title: {title}
 
 Style Guidelines:
 - Clean, minimalist, tech aesthetic
 - Modern and professional design
-- Suitable for social media sharing
+- Suitable for social media sharing (Xiaohongshu)
 
 Color Scheme:
 - Blue gradient background
@@ -70,14 +84,19 @@ Color Scheme:
 Visual Elements:
 - Abstract AI visualization
 - Cloud computing imagery
+- Network/connection patterns
 
 Text Overlay:
-- Title text: "{title[:20]}"
+- Main title text (prominent, readable)
 
 ## Ending Image Prompt
 Generate an ending/call-to-action image for a technical blog post.
 
-Text: "关注获取更多 AI 技术分享"
+Main Text: "关注获取更多 AI 技术分享"
+
+Project: github.com/vllm-project/vllm-omni
+
+References: {refs_text if refs_text else 'See blog post for details'}
 
 Style Guidelines:
 - Clean, minimalist, tech aesthetic
@@ -90,6 +109,7 @@ Color Scheme:
 Visual Elements:
 - "Follow for more" iconography
 - Social media engagement symbols
+- QR code or link placeholder (optional)
 """
 
         return short_content, image_prompts

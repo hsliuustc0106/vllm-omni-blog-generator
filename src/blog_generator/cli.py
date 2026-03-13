@@ -419,7 +419,10 @@ def publish(
         console.print(f"[green]✓[/green] Generated: {output_dir}/zhihu/content.md")
 
     if platform is None or platform == "xiaohongshu":
-        xhs_content, image_prompts = XiaohongshuFormatter.format(content, title, tags)
+        xhs_content, image_prompts = XiaohongshuFormatter.format(
+            content, title, tags,
+            pr_numbers=pr_numbers, issue_numbers=issue_numbers
+        )
         XiaohongshuFormatter.save(xhs_content, image_prompts, output_dir / "xiaohongshu")
         console.print(f"[green]✓[/green] Generated: {output_dir}/xiaohongshu/content.md")
         console.print(f"[green]✓[/green] Generated: {output_dir}/xiaohongshu/images/prompts.md")
