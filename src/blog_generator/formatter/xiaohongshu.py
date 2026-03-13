@@ -25,6 +25,7 @@ class XiaohongshuFormatter:
         tags: list[str],
         pr_numbers: list[int] = None,
         issue_numbers: list[int] = None,
+        github_repo_url: str = "https://github.com/vllm-project/vllm-omni",
     ) -> tuple[str, str]:
         """Format content for Xiaohongshu.
 
@@ -56,13 +57,15 @@ class XiaohongshuFormatter:
         hashtag_str = " ".join(f"#{tag}" for tag in tags[:5])
         short_content += hashtag_str
 
-        # Build references for ending prompt
-        refs = []
+        # Build clickable links for references
+        pr_links = []
+        issue_links = []
         if pr_numbers:
-            refs.extend([f"PR #{n}" for n in pr_numbers])
+            pr_links = [f"[PR #{n}]({github_repo_url}/pull/{n})" for n in pr_numbers]
         if issue_numbers:
-            refs.extend([f"Issue #{n}" for n in issue_numbers])
-        refs_text = " | ".join(refs) if refs else ""
+            issue_links = [f"[Issue #{n}]({github_repo_url}/issues/{n})" for n in issue_numbers]
+        all_links = pr_links + issue_links
+        links_text = " | ".join(all_links) if all_links else "See blog post for details"
 
         # Generate image prompts (cover and ending only - content uses PR images)
         image_prompts = f"""# Xiaohongshu Image Prompts
@@ -94,9 +97,9 @@ Generate an ending/call-to-action image for a technical blog post.
 
 Main Text: "关注获取更多 AI 技术分享"
 
-Project: github.com/vllm-project/vllm-omni
+Project: [{github_repo_url}]({github_repo_url})
 
-References: {refs_text if refs_text else 'See blog post for details'}
+References: {links_text}
 
 Style Guidelines:
 - Clean, minimalist, tech aesthetic

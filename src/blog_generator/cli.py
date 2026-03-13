@@ -409,6 +409,9 @@ def publish(
     pr_numbers = blog_data.get("source_prs", [])
     issue_numbers = blog_data.get("source_issues", [])
 
+    # Get config for github repo url
+    config = get_config()
+
     # Create approved marker
     (output_dir / "approved").touch()
 
@@ -421,7 +424,8 @@ def publish(
     if platform is None or platform == "xiaohongshu":
         xhs_content, image_prompts = XiaohongshuFormatter.format(
             content, title, tags,
-            pr_numbers=pr_numbers, issue_numbers=issue_numbers
+            pr_numbers=pr_numbers, issue_numbers=issue_numbers,
+            github_repo_url=config.github_repo_url
         )
         XiaohongshuFormatter.save(xhs_content, image_prompts, output_dir / "xiaohongshu")
         console.print(f"[green]✓[/green] Generated: {output_dir}/xiaohongshu/content.md")

@@ -35,6 +35,7 @@ class ApiConfig(BaseModel):
 class Config(BaseModel):
     api: ApiConfig
     github_token: Optional[str] = None
+    github_repo_url: str = "https://github.com/vllm-project/vllm-omni"
     default_language: str = "zh"
     retry: RetryConfigModel = Field(default_factory=RetryConfigModel)
     image: ImageConfig = Field(default_factory=ImageConfig)
