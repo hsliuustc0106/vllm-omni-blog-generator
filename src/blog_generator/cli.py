@@ -388,7 +388,7 @@ async def _generate_async(
 def publish(
     release: str = typer.Option(..., help="Release version"),
     platform: str = typer.Option(None, help="Platform (zhihu/xiaohongshu)"),
-    cover: bool = typer.Option(True, "--cover/--no-cover", help="Generate cover image via GLM-Image (Xiaohongshu only)"),
+    ai_images: bool = typer.Option(True, "--ai-images/--no-ai-images", help="Generate cover and ending images via GLM-Image (Xiaohongshu only)"),
 ) -> None:
     """Generate platform-specific versions from approved draft."""
     output_dir = get_blogs_dir_path() / release
@@ -425,8 +425,8 @@ def publish(
         XiaohongshuFormatter.save_post_json(content, title, tags, output_dir / "xiaohongshu")
         console.print(f"[green]✓[/green] Generated: {output_dir}/xiaohongshu/post.json")
 
-        # Generate cover image if requested
-        if cover:
+        # Generate AI images (cover + ending) if requested
+        if ai_images:
             asyncio.run(_generate_cover_image_async(output_dir, title, content, console))
 
     console.print(f"\n[bold green]✓ Published successfully![/bold green]")
@@ -442,9 +442,9 @@ async def _generate_cover_image_async(
     content: str,
     console: Console,
 ) -> None:
-    """Generate cover image for Xiaohongshu post.
+    """Generate cover and ending images for Xiaohongshu post.
 
-    Handles errors gracefully - logs warning and continues without cover image.
+    Handles errors gracefully - logs warning and continues without images.
 
     Args:
         output_dir: Blog output directory (e.g., blogs/v0.16.0)
@@ -459,8 +459,8 @@ async def _generate_cover_image_async(
         # Get API token from environment
         auth_token = os.environ.get("BIGMODEL_API_KEY")
         if not auth_token:
-            console.print("[yellow]⚠ BIGMODEL_API_KEY not set, skipping cover image generation[/yellow]")
-            console.print("  Set BIGMODEL_API_KEY environment variable to enable cover generation")
+            console.print("[yellow]⚠ BIGMODEL_API_KEY not set, skipping image generation[/yellow]")
+            console.print("  Set BIGMODEL_API_KEY environment variable to enable image generation")
             return
 
         # Initialize generator
@@ -468,33 +468,45 @@ async def _generate_cover_image_async(
         image_config = config.image
         generator = ImageGenerator(config=image_config, auth_token=auth_token)
 
-        # Build cover prompt
-        console.print("[cyan]Generating cover image via GLM-Image...[/cyan]")
-        prompt = XiaohongshuFormatter.build_cover_prompt(title, content)
-
-        # Generate image
-        generated = await generator.generate(prompt=prompt)
-
-        # Save cover image
+        # Prepare images directory
         images_dir = output_dir / "xiaohongshu" / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
-        cover_path = images_dir / "cover.png"
-        cover_path.write_bytes(generated.image_data)
 
+        # 1. Generate cover image
+        console.print("[cyan]Generating cover image via GLM-Image...[/cyan]")
+        cover_prompt = XiaohongshuFormatter.build_cover_prompt(title, content)
+        cover_generated = await generator.generate(prompt=cover_prompt)
+        cover_path = images_dir / "cover.png"
+        cover_path.write_bytes(cover_generated.image_data)
         console.print(f"[green]✓[/green] Generated cover image: {cover_path}")
 
-        # Update post.json with cover image path
-        abs_cover_path = str(cover_path.resolve())
-        XiaohongshuFormatter.update_post_json_images(
-            output_dir / "xiaohongshu",
-            [abs_cover_path]
+        # 2. Generate ending image
+        console.print("[cyan]Generating ending image via GLM-Image...[/cyan]")
+        ending_prompt = XiaohongshuFormatter.build_ending_prompt(title)
+        ending_generated = await generator.generate(prompt=ending_prompt)
+        ending_path = images_dir / "end.png"
+        ending_path.write_bytes(ending_generated.image_data)
+        console.print(f"[green]✓[/green] Generated ending image: {ending_path}")
+
+        # 3. Build combined image list: [cover] + [PR images] + [end]
+        combined_paths = XiaohongshuFormatter.build_combined_image_paths(
+            xhs_images_dir=images_dir,
+            blog_root=output_dir,
+            content_md=content,
         )
-        console.print(f"[green]✓[/green] Updated post.json with cover image path")
+
+        # 4. Update post.json with combined image paths
+        if combined_paths:
+            XiaohongshuFormatter.update_post_json_images(
+                output_dir / "xiaohongshu",
+                combined_paths
+            )
+            console.print(f"[green]✓[/green] Updated post.json with {len(combined_paths)} images (cover + PR images + end)")
 
     except Exception as e:
         # Handle errors gracefully - log warning and continue
-        console.print(f"[yellow]⚠ Cover image generation failed: {e}[/yellow]")
-        console.print("  Continuing without cover image. You can generate manually with:")
+        console.print(f"[yellow]⚠ Image generation failed: {e}[/yellow]")
+        console.print("  Continuing without images. You can generate manually with:")
         console.print(f"  [cyan]blog-generator xhs-images --release {output_dir.name}[/cyan]")
 
 

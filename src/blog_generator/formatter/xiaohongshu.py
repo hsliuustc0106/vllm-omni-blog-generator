@@ -50,31 +50,46 @@ class XiaohongshuFormatter:
         hashtag_str = " ".join(f"#{tag}" for tag in tags[:5])
         short_content += hashtag_str
 
-        # Generate image prompts
-        image_prompts = f"""# Xiaohongshu Cover Image Prompts
+        # Generate image prompts (cover and ending only - content uses PR images)
+        image_prompts = f"""# Xiaohongshu Image Prompts
 
 ## Cover Image Prompt
-Generate a cover image for a technical blog post about vLLM-Omni {title}.
+Generate a cover image for a technical blog post about vLLM-Omni.
 
-Style: Tech/minimalist, clean background
-Text: {title[:20]}
-Colors: Blue and white (tech feel)
-Elements: AI, multimodal, cloud icons
+Title: {title[:30]}
 
-## Carousel Images (Optional)
+Style Guidelines:
+- Clean, minimalist, tech aesthetic
+- Modern and professional design
+- Suitable for social media sharing
 
-### Slide 1: Title
-Text: {title}
-Background: Gradient blue
+Color Scheme:
+- Blue gradient background
+- White accents for contrast
 
-### Slide 2: Key Features
-List 3-4 main features from the blog
+Visual Elements:
+- Abstract AI visualization
+- Cloud computing imagery
 
-### Slide 3: Code Example
-Show a simple usage code snippet
+Text Overlay:
+- Title text: "{title[:20]}"
 
-### Slide 4: Call to Action
-"关注获取更多 AI 技术分享"
+## Ending Image Prompt
+Generate an ending/call-to-action image for a technical blog post.
+
+Text: "关注获取更多 AI 技术分享"
+
+Style Guidelines:
+- Clean, minimalist, tech aesthetic
+- Match the cover image style
+
+Color Scheme:
+- Blue gradient background (matching cover)
+- White text for contrast
+
+Visual Elements:
+- "Follow for more" iconography
+- Social media engagement symbols
 """
 
         return short_content, image_prompts
@@ -197,6 +212,46 @@ Text Overlay:
 
 Image Specifications:
 - Aspect ratio suitable for Xiaohongshu cover
+- High contrast for text visibility
+- Professional tech industry style"""
+
+        return prompt
+
+    @staticmethod
+    def build_ending_prompt(title: str) -> str:
+        """Build an image generation prompt for ending/CTA image.
+
+        Args:
+            title: Blog post title (for style consistency)
+
+        Returns:
+            Formatted prompt string for image generation
+        """
+        prompt = f"""Generate an ending/call-to-action image for a technical blog post.
+
+Title context: {title[:30]}
+
+Style Guidelines:
+- Clean, minimalist, tech aesthetic
+- Match the cover image style
+- Suitable for social media sharing
+
+Color Scheme:
+- Blue gradient background (matching cover style)
+- White text for contrast
+
+Visual Elements:
+- "Follow for more" iconography
+- Social media engagement symbols
+- Modern geometric shapes
+
+Text Overlay:
+- Main text: "关注获取更多 AI 技术分享"
+- Clean sans-serif font
+- Centered, large, readable
+
+Image Specifications:
+- Aspect ratio suitable for Xiaohongshu
 - High contrast for text visibility
 - Professional tech industry style"""
 
@@ -458,3 +513,40 @@ Image Specifications:
 
         with open(post_json_path, 'w', encoding='utf-8') as f:
             json.dump(post_data, f, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def build_combined_image_paths(
+        xhs_images_dir: Path,
+        blog_root: Path,
+        content_md: str,
+    ) -> list[str]:
+        """Build combined image path list: [cover] + [PR images] + [end].
+
+        Args:
+            xhs_images_dir: Path to xiaohongshu/images directory
+            blog_root: Path to blog root (e.g., blogs/pr962)
+            content_md: Blog markdown content (to extract PR image paths)
+
+        Returns:
+            List of absolute image paths in the correct order
+        """
+        images = []
+
+        # 1. Cover image (if exists)
+        cover_path = xhs_images_dir / "cover.png"
+        if cover_path.exists():
+            images.append(str(cover_path.resolve()))
+
+        # 2. PR images from blog content
+        pr_image_rel_paths = XiaohongshuFormatter.extract_image_paths(content_md)
+        for rel_path in pr_image_rel_paths:
+            abs_path = (blog_root / rel_path).resolve()
+            if abs_path.exists():
+                images.append(str(abs_path))
+
+        # 3. Ending image (if exists)
+        end_path = xhs_images_dir / "end.png"
+        if end_path.exists():
+            images.append(str(end_path.resolve()))
+
+        return images
