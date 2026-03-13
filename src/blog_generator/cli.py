@@ -25,7 +25,7 @@ from blog_generator.fetcher.images import (
 )
 from blog_generator.generator.claude import ClaudeGenerator
 from blog_generator.formatter.markdown import MarkdownFormatter
-from blog_generator.formatter.json_fmt import JsonFormatter
+from blog_generator.formatter.json_fmt import JsonFormatter, BlogValidationError
 from blog_generator.formatter.zhihu import ZhihuFormatter
 from blog_generator.formatter.xiaohongshu import XiaohongshuFormatter
 from blog_generator.utils.retry import NotFoundError, RetryExhaustedError
@@ -402,6 +402,17 @@ def publish(
     # Read draft
     with open(output_dir / "blog.json") as f:
         blog_data = json.load(f)
+
+    # Validate blog.json
+    try:
+        warnings = JsonFormatter.validate(blog_data)
+        if warnings:
+            console.print("[yellow]⚠ Blog.json validation warnings:[/yellow]")
+            for warning in warnings:
+                console.print(f"  - {warning}")
+    except BlogValidationError as e:
+        console.print(f"[red]Error: Blog.json validation failed: {e}[/red]")
+        raise typer.Exit(1)
 
     title = blog_data["title"]
     content = blog_data["content_md"]
